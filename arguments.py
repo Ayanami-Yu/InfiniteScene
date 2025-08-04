@@ -42,12 +42,12 @@ class CameraParams:
     def __init__(self, H: int = 512, W: int = 512):
         self.H = H
         self.W = W
-        self.focal = (5.8269e02, 5.8269e02)
+        self.focal = (5.8269e02, 5.8269e02)  # TODO why this hard-coded number
         self.fov = (
             2 * np.arctan(self.W / (2 * self.focal[0])),
             2 * np.arctan(self.H / (2 * self.focal[1])),
         )
-        self.K = np.array(
+        self.K = np.array(  # intrinsics (camera to image)
             [
                 [self.focal[0], 0.0, self.W / 2],
                 [0.0, self.focal[1], self.H / 2],

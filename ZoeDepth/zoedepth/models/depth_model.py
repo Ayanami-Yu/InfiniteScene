@@ -86,7 +86,7 @@ class DepthModel(nn.Module):
         assert x.shape[1] == 3, "x must have 3 channels, got {}".format(x.shape[1])
 
         if pad_input:
-            assert fh > 0 or fw > 0, "atlease one of fh and fw must be greater than 0"
+            assert fh > 0 or fw > 0, "at least one of fh and fw must be greater than 0"
             pad_h = int(np.sqrt(x.shape[2] / 2) * fh)
             pad_w = int(np.sqrt(x.shape[3] / 2) * fw)
             padding = [pad_w, pad_w]

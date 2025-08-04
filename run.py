@@ -13,14 +13,16 @@ if __name__ == "__main__":
         "--image",
         "-img",
         type=str,
-        default="examples/Image015_animelakehouse.jpg",
+        # default="examples/Image015_animelakehouse.jpg",
+        default="examples/hawaii.png",
         help="Input image for scene generation",
     )
     parser.add_argument(
         "--text",
         "-t",
         type=str,
-        default="examples/Image015_animelakehouse.txt",
+        # default="examples/Image015_animelakehouse.txt",
+        default="examples/hawaii.txt",
         help="Text prompt for scene generation",
     )
     parser.add_argument(
@@ -36,7 +38,7 @@ if __name__ == "__main__":
         "--campath_gen",
         "-cg",
         type=str,
-        default="lookdown",
+        default="lookaround",
         choices=["lookdown", "lookaround", "rotate360"],
         help="Camera extrinsic trajectories for scene generation",
     )
@@ -44,7 +46,7 @@ if __name__ == "__main__":
         "--campath_render",
         "-cr",
         type=str,
-        default="llff",
+        default="back_and_forth",
         choices=["back_and_forth", "llff", "headbanging"],
         help="Camera extrinsic trajectories for video rendering",
     )
@@ -59,7 +61,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--seed",
         type=int,
-        default=1,
+        # default=1,
+        default=83920174658,
         help="Manual seed for running Stable Diffusion inpainting",
     )
     parser.add_argument(

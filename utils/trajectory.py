@@ -931,7 +931,7 @@ def generate_seed_360_half(viewangle, n_views):
 
 def generate_seed_preset():
     degsum = 60
-    thlist = np.concatenate(
+    thlist = np.concatenate(  # in degree
         (
             np.linspace(0, degsum, 4),
             np.linspace(0, -degsum, 4)[1:],
@@ -1627,7 +1627,7 @@ def main():
         render_poses = generate_seed_llff(5, 400, round=4, d=d)
     elif cam_path == "headbanging":
         round = 3
-        render_poses = generate_seed_headbanging_(
+        render_poses = generate_seed_headbanging(
             maxdeg=15, nviews_per_round=180, round=round, fullround=0
         )
     elif cam_path == "headbanging_circle":

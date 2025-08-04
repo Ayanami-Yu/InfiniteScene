@@ -492,9 +492,9 @@ class LucidDreamer:
         depth_curr = self.d(image_curr)
         center_depth = np.mean(
             depth_curr[h_in // 2 - 10 : h_in // 2 + 10, w_in // 2 - 10 : w_in // 2 + 10]
-        )
+        )  # FIXME (h_in, w_in) or (cam.W, cam.H)? because image has been cropped
 
-        ###########################################################################################################################
+        #########################################################################################
         # Iterative scene generation
         H, W, K = self.cam.H, self.cam.W, self.cam.K
 
@@ -541,13 +541,13 @@ class LucidDreamer:
         for i in iterable_dream:
             R, T = render_poses[i, :3, :3], render_poses[i, :3, 3:4]
 
-            ### Transform world to pixel
+            # transform world to pixel
             pts_coord_cam2 = (
                 R.dot(pts_coord_world) + T
-            )  ### Same with c2w*world_coord (in homogeneous space)
+            )  # same as c2w x world_coord (in homogeneous space)
             pixel_coord_cam2 = np.matmul(
                 K, pts_coord_cam2
-            )  # .reshape(3,H,W).transpose(1,2,0).astype(np.float32)
+            )  # [3, N] the previous 3D points in camera coord
 
             valid_idx = np.where(
                 np.logical_and.reduce(
@@ -560,7 +560,7 @@ class LucidDreamer:
                     )
                 )
             )[0]
-            pixel_coord_cam2 = (
+            pixel_coord_cam2 = (  # divide by z coord to get homogeneous coord
                 pixel_coord_cam2[:2, valid_idx] / pixel_coord_cam2[-1:, valid_idx]
             )
             round_coord_cam2 = np.round(pixel_coord_cam2).astype(np.int32)
@@ -570,7 +570,7 @@ class LucidDreamer:
                 np.arange(H, dtype=np.float32),
                 indexing="xy",
             )
-            grid = np.stack((x, y), axis=-1).reshape(-1, 2)
+            grid = np.stack((x, y), axis=-1).reshape(-1, 2)  # [N, 2] row-major
             image2 = interp_grid(
                 pixel_coord_cam2.transpose(1, 0),
                 pts_colors[valid_idx],
@@ -590,10 +590,10 @@ class LucidDreamer:
                 -1
             )
 
-            mask2 = minimum_filter(
+            mask2 = minimum_filter(  # M_i
                 (image2.sum(-1) != -3) * 1, size=(11, 11), axes=(0, 1)
             )
-            image2 = mask2[..., None] * image2 + (1 - mask2[..., None]) * 0
+            image2 = mask2[..., None] * image2 + (1 - mask2[..., None]) * 0  # \hat{I}_i
 
             mask_hf = np.abs(mask2[: H - 1, : W - 1] - mask2[1:, : W - 1]) + np.abs(
                 mask2[: H - 1, : W - 1] - mask2[: H - 1, 1:]
@@ -606,23 +606,23 @@ class LucidDreamer:
                 0
             ]  # use valid_idx[border_valid_idx] for world1
 
-            image_curr = self.rgb(
+            image_curr = self.rgb(  # inpainting  # I_i
                 prompt=prompt,
-                image=image2,  # Image.fromarray(np.round(image2*255.).astype(np.uint8)),
+                image=image2,
                 negative_prompt=negative_prompt,
                 generator=generator,
                 num_inference_steps=diff_steps,
-                mask_image=mask2,  # Image.fromarray(np.round((1-mask2[:,:])*255.).astype(np.uint8))
+                mask_image=mask2,
             )
-            depth_curr = self.d(image_curr)
+            depth_curr = self.d(image_curr)  # \hat{D}_i
 
-            ### depth optimize
+            # depth optimize
             t_z2 = torch.tensor(depth_curr)
-            sc = torch.ones(1).float().requires_grad_(True)
+            sc = torch.ones(1).float().requires_grad_(True)  # d_i
             optimizer = torch.optim.Adam(params=[sc], lr=0.001)
 
             # for idx in range(5):  # TODO change the number back
-            for idx in range(100):
+            for idx in range(100):  # d_i optimization loop
                 trans3d = torch.tensor(
                     [[sc, 0, 0, 0], [0, sc, 0, 0], [0, 0, sc, 0], [0, 0, 0, 1]]
                 ).requires_grad_(True)
@@ -642,14 +642,14 @@ class LucidDreamer:
                     (coord_world2, torch.ones((1, valid_idx.shape[0]))), dim=0
                 )
                 coord_world2_trans = torch.matmul(trans3d, coord_world2_warp)
-                coord_world2_trans = coord_world2_trans[:3] / coord_world2_trans[-1]
+                coord_world2_trans = coord_world2_trans[:3] / coord_world2_trans[-1]  # \tilde{P}_i
                 loss = torch.mean(
                     (
                         torch.tensor(pts_coord_world[:, valid_idx]).float()
-                        - coord_world2_trans
+                        - coord_world2_trans  # P_{i - 1} - \tilde{P}_i
                     )
                     ** 2
-                )
+                )  # align with the old 3d points backprojected from the previous camera
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -678,19 +678,19 @@ class LucidDreamer:
                     (coord_world2, torch.ones((1, border_valid_idx.shape[0]))), dim=0
                 )
                 coord_world2_trans = torch.matmul(trans3d, coord_world2_warp)
-                coord_world2_trans = coord_world2_trans[:3] / coord_world2_trans[-1]
+                coord_world2_trans = coord_world2_trans[:3] / coord_world2_trans[-1]  # rectified \tilde{P}_i (no new points added)
 
             trans3d = trans3d.detach().numpy()
-
+            # backproject new 3D points from inpainted region
             pts_coord_cam2 = np.matmul(
                 np.linalg.inv(K),
                 np.stack(
                     (x * depth_curr, y * depth_curr, 1 * depth_curr), axis=0
                 ).reshape(3, -1),
-            )[:, np.where(1 - mask2.reshape(-1))[0]]
+            )[:, np.where(1 - mask2.reshape(-1))[0]]  # select M_i == 0
             camera_origin_coord_world2 = (
                 -np.linalg.inv(R).dot(T).astype(np.float32)
-            )  # 3, 1
+            )  # [3, 1] camera origin in world coord
             new_pts_coord_world2 = (
                 np.linalg.inv(R).dot(pts_coord_cam2) - np.linalg.inv(R).dot(T)
             ).astype(np.float32)
@@ -699,16 +699,16 @@ class LucidDreamer:
                 axis=0,
             )
             new_pts_coord_world2 = np.matmul(trans3d, new_pts_coord_world2_warp)
-            new_pts_coord_world2 = new_pts_coord_world2[:3] / new_pts_coord_world2[-1]
+            new_pts_coord_world2 = new_pts_coord_world2[:3] / new_pts_coord_world2[-1]  # \hat{P}_i
             new_pts_colors2 = (
                 np.array(image_curr).reshape(-1, 3).astype(np.float32) / 255.0
             )[np.where(1 - mask2.reshape(-1))[0]]
 
             vector_camorigin_to_campixels = (
                 coord_world2_trans.detach().numpy() - camera_origin_coord_world2
-            )
+            )  # the ray lines from cam center to corresponding points
             vector_camorigin_to_pcdpixels = (
-                pts_coord_world[:, valid_idx[border_valid_idx]]
+                pts_coord_world[:, valid_idx[border_valid_idx]]  # P_{i - 1}
                 - camera_origin_coord_world2
             )
 
@@ -736,19 +736,19 @@ class LucidDreamer:
             compensate_depth_zero = np.zeros(4)
             compensate_depth = np.concatenate(
                 (compensate_depth_correspond, compensate_depth_zero), axis=0
-            )  # N_correspond+4
+            )  # N_correspond + 4
 
             pixel_cam2_correspond = pixel_coord_cam2[
                 :, border_valid_idx
-            ]  # 2, N_correspond (xy)
+            ]  # 2, N_correspond (xy)  # points corresponding to the previous image (in cam coord)
             pixel_cam2_zero = np.array([[0, 0, W - 1, W - 1], [0, H - 1, 0, H - 1]])
             pixel_cam2 = np.concatenate(
                 (pixel_cam2_correspond, pixel_cam2_zero), axis=1
             ).transpose(
                 1, 0
-            )  # N+H, 2
+            )  # N + H, 2
 
-            # Calculate for masked pixels
+            # calculate for each pixel how much the depth value should change using linear interpolation
             masked_pixels_xy = np.stack(np.where(1 - mask2), axis=1)[:, [1, 0]]
             new_depth_linear, new_depth_nearest = interp_grid(
                 pixel_cam2, compensate_depth, masked_pixels_xy
@@ -759,7 +759,7 @@ class LucidDreamer:
                 np.isnan(new_depth_linear), new_depth_nearest, new_depth_linear
             )
 
-            pts_coord_cam2 = np.matmul(
+            pts_coord_cam2 = np.matmul(  # corresponds to the newly added points
                 np.linalg.inv(K),
                 np.stack(
                     (x * depth_curr, y * depth_curr, 1 * depth_curr), axis=0
@@ -768,7 +768,7 @@ class LucidDreamer:
             x_nonmask, y_nonmask = (
                 x.reshape(-1)[np.where(1 - mask2.reshape(-1))[0]],
                 y.reshape(-1)[np.where(1 - mask2.reshape(-1))[0]],
-            )
+            )  # the points without GT counterparts (M_i == 0)
             compensate_pts_coord_cam2 = np.matmul(
                 np.linalg.inv(K),
                 np.stack(
@@ -786,14 +786,14 @@ class LucidDreamer:
                 axis=0,
             )
             new_pts_coord_world2 = np.matmul(trans3d, new_pts_coord_world2_warp)
-            new_pts_coord_world2 = new_pts_coord_world2[:3] / new_pts_coord_world2[-1]
+            new_pts_coord_world2 = new_pts_coord_world2[:3] / new_pts_coord_world2[-1]  # W(\hat{P}_i)
             new_pts_colors2 = (
                 np.array(image_curr).reshape(-1, 3).astype(np.float32) / 255.0
             )[np.where(1 - mask2.reshape(-1))[0]]
 
-            pts_coord_world = np.concatenate(
+            pts_coord_world = np.concatenate(  # P_i = P_{i - 1} \cup W(\hat{P}_i)
                 (pts_coord_world, new_pts_coord_world2), axis=-1
-            )  ### Same with inv(c2w) * cam_coord (in homogeneous space)
+            )
             pts_colors = np.concatenate((pts_colors, new_pts_colors2), axis=0)
 
         #################################################################################################
@@ -825,9 +825,9 @@ class LucidDreamer:
         for i in iterable_align:
             for j in range(len(internal_render_poses)):
                 idx = i * len(internal_render_poses) + j
-                print(f"{idx+1} / {len(render_poses)*len(internal_render_poses)}")
+                print(f"{idx + 1} / {len(render_poses) * len(internal_render_poses)}")
 
-                ### Transform world to pixel
+                # transform world to pixel
                 Rw2i = render_poses[i, :3, :3]
                 Tw2i = render_poses[i, :3, 3:4]
                 Ri2j = internal_render_poses[j, :3, :3]
@@ -842,7 +842,7 @@ class LucidDreamer:
                 Pc2w = np.concatenate((Rj2w, Tj2w), axis=1)
                 Pc2w = np.concatenate((Pc2w, np.array([[0, 0, 0, 1]])), axis=0)
 
-                pts_coord_camj = Rw2j.dot(pts_coord_world) + Tw2j
+                pts_coord_camj = Rw2j.dot(pts_coord_world) + Tw2j  # project P_N onto camj
                 pixel_coord_camj = np.matmul(K, pts_coord_camj)
 
                 valid_idxj = np.where(
