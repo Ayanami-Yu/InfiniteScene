@@ -3,10 +3,10 @@ import torch
 from tqdm import tqdm
 import torch.nn as nn
 import torch.optim as optim
-import memory_management as mm
-from zoom_stack import ZoomStack
+import gen_powers_10.memory_management as mm
+from .zoom_stack import ZoomStack
 from transformers import T5Tokenizer, T5EncoderModel
-from gen_powers_10.utils import save_collage, preprocess_photograph, numpy_to_pil
+from .utils import save_collage, preprocess_photograph, numpy_to_pil
 from diffusers import (
     UNet2DConditionModel,
     DDPMScheduler,

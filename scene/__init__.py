@@ -20,7 +20,7 @@ class Scene:
         self.gaussians = gaussians
 
         info = readDataInfo(traindata, opt.white_background)
-        random.shuffle(info.train_cameras)  # Multi-res consistent random shuffling
+        random.shuffle(info.train_cameras)  # multi-res consistent random shuffling
         self.cameras_extent = info.nerf_normalization["radius"]
 
         print("Loading Training Cameras")
