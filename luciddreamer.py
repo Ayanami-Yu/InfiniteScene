@@ -12,22 +12,16 @@
 # For permission requests, please contact robot0321@snu.ac.kr, esw0116@snu.ac.kr, namhj28@gmail.com, jarin.lee@gmail.com.
 import os
 import glob
-import json
-import time
 import datetime
 import warnings
 import shutil
 from random import randint
-from argparse import ArgumentParser
 
 warnings.filterwarnings(action="ignore")
 
-import pickle
 import imageio
 import numpy as np
-import open3d as o3d
 from PIL import Image
-from tqdm import tqdm
 from scipy.interpolate import griddata as interp_grid
 from scipy.ndimage import minimum_filter, maximum_filter
 
@@ -36,7 +30,6 @@ import torch.nn.functional as F
 import gradio as gr
 from diffusers import (
     StableDiffusionInpaintPipeline,
-    StableDiffusionPipeline,
     ControlNetModel,
     StableDiffusionControlNetInpaintPipeline,
 )
@@ -44,12 +37,12 @@ from diffusers import (
 from arguments import GSParams, CameraParams
 from gaussian_renderer import render
 from scene import Scene, GaussianModel
-from scene.dataset_readers import loadCameraPreset
 from utils.loss import l1_loss, ssim
 from utils.camera import load_json
 from utils.depth import colorize
 from utils.lama import LaMa
-from utils.trajectory import get_camerapaths, get_pcdGenPoses
+from utils.trajectory import get_pcdGenPoses
+from gen_powers_10.model import GenPowers10Pipeline
 
 
 get_kernel = lambda p: torch.ones(1, 1, p * 2 + 1, p * 2 + 1).to("cuda")
@@ -69,7 +62,7 @@ pad_mask = lambda x, padamount=1: t2np(
 
 
 class LucidDreamer:
-    def __init__(self, for_gradio=True, save_dir=None):
+    def __init__(self, for_gradio=True, save_dir=None, version="DFIF_XL_L_X4"):
         self.opt = GSParams()
         self.cam = CameraParams()
         self.save_dir = save_dir
@@ -97,6 +90,7 @@ class LucidDreamer:
             pretrained=True,
             load_local=True,
         ).to("cuda")
+        self.version = version
         self.controlnet = None
         self.lama = None
         self.current_model = self.default_model
@@ -237,6 +231,7 @@ class LucidDreamer:
         diff_steps,
         model_name=None,
         example_name=None,
+        p=None,
     ):
         if self.for_gradio:
             self.cleaner()
@@ -244,23 +239,59 @@ class LucidDreamer:
         if example_name and example_name != "DON'T":  # False
             outfile = os.path.join("examples", f"{example_name}.ply")
             if not os.path.exists(outfile):
-                self.traindata = self.generate_pcd(
-                    rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps
+                self.create_scene(
+                    rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p
                 )
-                self.scene = Scene(self.traindata, self.gaussians, self.opt)
-                self.training()
             outfile = self.save_ply(outfile)
         else:
-            self.traindata = self.generate_pcd(
-                rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps
+            self.create_scene(
+                rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p
             )
-            self.scene = Scene(self.traindata, self.gaussians, self.opt)
-            self.training()
             self.timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
             if not os.path.exists(self.save_dir):
                 os.makedirs(self.save_dir)
             outfile = self.save_ply(os.path.join(self.save_dir, "gsplat.ply"))
         return outfile
+
+    def create_scene(
+        self, rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p
+    ):
+        # TODO remove assertion after complete implementation
+        assert rgb_cond is None and type(txt_cond) is list
+
+        # 1) generate the initial zoom stack
+        self.zoom_model = GenPowers10Pipeline(self.version)
+        render_poses = get_pcdGenPoses(pcdgenpath)
+        save_dir = f"{self.save_dir}/{self.version}"
+        images = self.zoom_model(
+            txt_cond,
+            neg_txt_cond,
+            p,
+            save_dir,
+            num_inference_steps=diff_steps,
+            guidance_scale=7,
+            photograph=None,
+            viz_step=0,
+        )  # list of PIL images
+        R0, T0 = render_poses[0, :3, :3], render_poses[0, :3, 3:4]
+        K = [
+            [
+                [self.focal[0] * (p**i), 0.0, self.W / 2],
+                [0.0, self.focal[1] * (p**i), self.H / 2],
+                [0.0, 0.0, 1.0],
+            ]
+            for i in range(images)
+        ]
+
+        # 2) generate complete scene at most zoomed-out level
+        self.traindata = self.generate_pcd(
+            images[0], txt_cond[0], neg_txt_cond, pcdgenpath, seed, diff_steps
+        )
+        self.scene = Scene(self.traindata, self.gaussians, self.opt)
+        self.training()
+
+        # 3) generate zoomed-in scene
+        
 
     def save_ply(self, fpath=None):
         if fpath is None:
@@ -274,7 +305,7 @@ class LucidDreamer:
         return fpath
 
     def cleaner(self):
-        # Remove the temporary file created yesterday.
+        # remove the temporary file created yesterday.
         for dpath in glob.glob(os.path.join("/tmp/gradio", "*", self.root, "*")):
             timestamp = datetime.datetime.strptime(
                 os.path.basename(dpath), "%y%m%d_%H%M%S"
@@ -285,7 +316,7 @@ class LucidDreamer:
                 except OSError as e:
                     print("Error: %s - %s." % (e.filename, e.strerror))
         if self.for_gradio:
-            # Delete gsplat.ply if exists
+            # delete gsplat.ply if exists
             if os.path.exists("./gsplat.ply"):
                 os.remove("./gsplat.ply")
 
@@ -507,7 +538,7 @@ class LucidDreamer:
         edgemask = np.ones((H - 2 * edgeN, W - 2 * edgeN))
         edgemask = np.pad(edgemask, ((edgeN, edgeN), (edgeN, edgeN)))
 
-        ### initialize
+        # initialize
         R0, T0 = render_poses[0, :3, :3], render_poses[0, :3, 3:4]
         pts_coord_cam = np.matmul(
             np.linalg.inv(K),
@@ -642,7 +673,9 @@ class LucidDreamer:
                     (coord_world2, torch.ones((1, valid_idx.shape[0]))), dim=0
                 )
                 coord_world2_trans = torch.matmul(trans3d, coord_world2_warp)
-                coord_world2_trans = coord_world2_trans[:3] / coord_world2_trans[-1]  # \tilde{P}_i
+                coord_world2_trans = (
+                    coord_world2_trans[:3] / coord_world2_trans[-1]
+                )  # \tilde{P}_i
                 loss = torch.mean(
                     (
                         torch.tensor(pts_coord_world[:, valid_idx]).float()
@@ -678,7 +711,9 @@ class LucidDreamer:
                     (coord_world2, torch.ones((1, border_valid_idx.shape[0]))), dim=0
                 )
                 coord_world2_trans = torch.matmul(trans3d, coord_world2_warp)
-                coord_world2_trans = coord_world2_trans[:3] / coord_world2_trans[-1]  # rectified \tilde{P}_i (no new points added)
+                coord_world2_trans = (
+                    coord_world2_trans[:3] / coord_world2_trans[-1]
+                )  # rectified \tilde{P}_i (no new points added)
 
             trans3d = trans3d.detach().numpy()
             # backproject new 3D points from inpainted region
@@ -687,7 +722,9 @@ class LucidDreamer:
                 np.stack(
                     (x * depth_curr, y * depth_curr, 1 * depth_curr), axis=0
                 ).reshape(3, -1),
-            )[:, np.where(1 - mask2.reshape(-1))[0]]  # select M_i == 0
+            )[
+                :, np.where(1 - mask2.reshape(-1))[0]
+            ]  # select M_i == 0
             camera_origin_coord_world2 = (
                 -np.linalg.inv(R).dot(T).astype(np.float32)
             )  # [3, 1] camera origin in world coord
@@ -699,7 +736,9 @@ class LucidDreamer:
                 axis=0,
             )
             new_pts_coord_world2 = np.matmul(trans3d, new_pts_coord_world2_warp)
-            new_pts_coord_world2 = new_pts_coord_world2[:3] / new_pts_coord_world2[-1]  # \hat{P}_i
+            new_pts_coord_world2 = (
+                new_pts_coord_world2[:3] / new_pts_coord_world2[-1]
+            )  # \hat{P}_i
             new_pts_colors2 = (
                 np.array(image_curr).reshape(-1, 3).astype(np.float32) / 255.0
             )[np.where(1 - mask2.reshape(-1))[0]]
@@ -786,7 +825,9 @@ class LucidDreamer:
                 axis=0,
             )
             new_pts_coord_world2 = np.matmul(trans3d, new_pts_coord_world2_warp)
-            new_pts_coord_world2 = new_pts_coord_world2[:3] / new_pts_coord_world2[-1]  # W(\hat{P}_i)
+            new_pts_coord_world2 = (
+                new_pts_coord_world2[:3] / new_pts_coord_world2[-1]
+            )  # W(\hat{P}_i)
             new_pts_colors2 = (
                 np.array(image_curr).reshape(-1, 3).astype(np.float32) / 255.0
             )[np.where(1 - mask2.reshape(-1))[0]]
@@ -842,7 +883,9 @@ class LucidDreamer:
                 Pc2w = np.concatenate((Rj2w, Tj2w), axis=1)
                 Pc2w = np.concatenate((Pc2w, np.array([[0, 0, 0, 1]])), axis=0)
 
-                pts_coord_camj = Rw2j.dot(pts_coord_world) + Tw2j  # project P_N onto camj
+                pts_coord_camj = (
+                    Rw2j.dot(pts_coord_world) + Tw2j
+                )  # project P_N onto camj
                 pixel_coord_camj = np.matmul(K, pts_coord_camj)
 
                 valid_idxj = np.where(
