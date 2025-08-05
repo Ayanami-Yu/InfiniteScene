@@ -4,7 +4,7 @@ import json
 from PIL import Image
 
 from luciddreamer import LucidDreamer
-from pytorch_lightning import seed_everything
+from gen_powers_10.utils import seed_everything
 
 
 if __name__ == "__main__":
@@ -43,7 +43,7 @@ if __name__ == "__main__":
         "--campath_gen",
         "-cg",
         type=str,
-        default="lookaround",
+        default="lookdown",
         choices=["lookdown", "lookaround", "rotate360"],
         help="Camera extrinsic trajectories for scene generation",
     )
@@ -141,4 +141,8 @@ if __name__ == "__main__":
         model_name=args.model_name,
         p=metadata["p"] if metadata else None,
     )
-    ld.render_video(args.campath_render)
+    # ld.render_video(args.campath_render)
+    ld.render_video("back_and_forth")
+    ld.render_video("llff")
+    ld.render_video("headbanging")
+    ld.render_video("tapered")  # TODO test

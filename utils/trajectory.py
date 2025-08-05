@@ -656,14 +656,6 @@ def generate_seed(scale, viewangle):
         )  # * scale # Transition vector
         render_poses.append(posetemp)
 
-    # for i,j in zip([ang,2*ang,3*ang,2*ang,ang,0,-ang,-2*ang,-3*ang,-2*ang,-ang,0,ang,2*ang,3*ang,2*ang,ang,0], [0,0,0,ang,2*ang,3*ang,2*ang,ang,0,-ang,-2*ang,-3*ang,-2*ang,-ang,0,0,0,0]):
-    #     th, phi = i/180*np.pi, j/180*np.pi
-    #     posetemp = np.zeros((3, 4))
-    #     posetemp[:3,:3] = np.matmul(np.array([[np.cos(rot_cam/180*np.pi), 0, np.sin(rot_cam/180*np.pi)], [0, 1, 0], [-np.sin(rot_cam/180*np.pi), 0, np.cos(rot_cam/180*np.pi)]]),
-    #                                 np.matmul(np.array([[np.cos(th), 0, np.sin(th)], [0, 1, 0], [-np.sin(th), 0, np.cos(th)]]), np.array([[1, 0, 0], [0, np.cos(phi), -np.sin(phi)], [0, np.sin(phi), np.cos(phi)]])))
-    #     posetemp[:3,3:4] = np.array([0,0,-1]).reshape(3,1) # * scale # Transition vector
-    #     render_poses.append(posetemp)
-
     rot_cam = viewangle
     for i, j in zip(
         [
@@ -878,18 +870,8 @@ def generate_seed(scale, viewangle):
                 ),
             ),
         )
-        posetemp[:3, 3:4] = np.array([0, 0, 1]).reshape(
-            3, 1
-        )  # * scale # Transition vector
+        posetemp[:3, 3:4] = np.array([0, 0, 1]).reshape(3, 1)  # transition vector
         render_poses.append(posetemp)
-
-    # for i,j in zip([ang,2*ang,3*ang,2*ang,ang,0,-ang,-2*ang,-3*ang,-2*ang,-ang,0,ang,2*ang,3*ang,2*ang,ang,0], [0,0,0,ang,2*ang,3*ang,2*ang,ang,0,-ang,-2*ang,-3*ang,-2*ang,-ang,0,0,0,0]):
-    #     th, phi = i/180*np.pi, j/180*np.pi
-    #     posetemp = np.zeros((3, 4))
-    #     posetemp[:3,:3] = np.matmul(np.array([[np.cos(rot_cam/180*np.pi), 0, np.sin(rot_cam/180*np.pi)], [0, 1, 0], [-np.sin(rot_cam/180*np.pi), 0, np.cos(rot_cam/180*np.pi)]]),
-    #                                 np.matmul(np.array([[np.cos(th), 0, np.sin(th)], [0, 1, 0], [-np.sin(th), 0, np.cos(th)]]), np.array([[1, 0, 0], [0, np.cos(phi), -np.sin(phi)], [0, np.sin(phi), np.cos(phi)]])))
-    #     posetemp[:3,3:4] = np.array([-1,0,0]).reshape(3,1) # * scale # Transition vector
-    #     render_poses.append(posetemp)
 
     render_poses.append(np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]))
     render_poses = np.stack(render_poses, axis=0)
@@ -897,8 +879,8 @@ def generate_seed(scale, viewangle):
     return render_poses
 
 
-def generate_seed_360(viewangle, n_views):
-    N = n_views
+def generate_seed_360(viewangle, n_views, scale=1):
+    N = n_views * scale
     render_poses = np.zeros((N, 3, 4))
     for i in range(N):
         th = (viewangle / N) * i / 180 * np.pi
@@ -929,20 +911,25 @@ def generate_seed_360_half(viewangle, n_views):
     return render_poses
 
 
-def generate_seed_preset():
-    degsum = 60
+def generate_seed_preset(scale=1):
+    th_max = 60 / scale
+    phi_max = 22.5 / scale
     thlist = np.concatenate(  # in degree
         (
-            np.linspace(0, degsum, 4),
-            np.linspace(0, -degsum, 4)[1:],
-            np.linspace(0, degsum, 4),
-            np.linspace(0, -degsum, 4)[1:],
-            np.linspace(0, degsum, 4),
-            np.linspace(0, -degsum, 4)[1:],
+            np.linspace(0, th_max, 4),
+            np.linspace(0, -th_max, 4)[1:],
+            np.linspace(0, th_max, 4),
+            np.linspace(0, -th_max, 4)[1:],
+            np.linspace(0, th_max, 4),
+            np.linspace(0, -th_max, 4)[1:],
         )
     )
     philist = np.concatenate(
-        (np.linspace(0, 0, 7), np.linspace(-22.5, -22.5, 7), np.linspace(22.5, 22.5, 7))
+        (
+            np.linspace(0, 0, 7),
+            np.linspace(-phi_max, -phi_max, 7),
+            np.linspace(phi_max, phi_max, 7),
+        )
     )
     assert len(thlist) == len(philist)
 
@@ -972,17 +959,18 @@ def generate_seed_preset():
     return render_poses
 
 
-def generate_seed_newpreset():
-    degsum = 60
+def generate_seed_newpreset(scale=1):
+    th_max = 60 / scale
+    phi_max = 22.5 / scale
     thlist = np.concatenate(
         (
-            np.linspace(0, degsum, 4),
-            np.linspace(0, -degsum, 4)[1:],
-            np.linspace(0, degsum, 4),
-            np.linspace(0, -degsum, 4)[1:],
+            np.linspace(0, th_max, 4),
+            np.linspace(0, -th_max, 4)[1:],
+            np.linspace(0, th_max, 4),
+            np.linspace(0, -th_max, 4)[1:],
         )
     )
-    philist = np.concatenate((np.linspace(0, 0, 7), np.linspace(22.5, 22.5, 7)))
+    philist = np.concatenate((np.linspace(0, 0, 7), np.linspace(phi_max, phi_max, 7)))
     assert len(thlist) == len(philist)
 
     render_poses = np.zeros((len(thlist), 3, 4))
@@ -1070,8 +1058,8 @@ def generate_seed_arc():
     return render_poses
 
 
-def generate_seed_hemisphere(center_depth, degree=5):
-    degree = 5
+def generate_seed_hemisphere(center_depth, degree=5, scale=1):
+    degree = 5 / scale
     thlist = np.array([degree, 0, 0, 0, -degree])
     philist = np.array([0, -degree, 0, degree, 0])
     assert len(thlist) == len(philist)
@@ -1080,7 +1068,6 @@ def generate_seed_hemisphere(center_depth, degree=5):
     for i in range(len(thlist)):
         th = thlist[i]
         phi = philist[i]
-        # curr_pose = np.zeros((1, 3, 4))
         d = center_depth  # central point of (hemi)sphere / you can change this value
 
         render_poses[i, :3, :3] = np.matmul(
@@ -1105,8 +1092,7 @@ def generate_seed_hemisphere(center_depth, degree=5):
             [0, d * np.sin(phi / 180 * np.pi), d - d * np.cos(phi / 180 * np.pi)]
         ).reshape(
             3, 1
-        )  # Transition vector
-        # render_poses[i,:3,3:4] = np.zeros((3,1))
+        )  # transition vector
 
     return render_poses
 
@@ -1552,11 +1538,84 @@ def generate_seed_headbanging_circle(maxdeg, nviews_per_round, round=3, fullroun
     return render_poses
 
 
-def get_pcdGenPoses(pcdgenpath, argdict={}):
+def generate_tapered_orbit(  # TODO test
+    degree_start=5,
+    degree_end=0.5,
+    nviews=400,
+    rounds=2,
+    distance_start=5,
+    distance_end=2,
+    height_decay=0.5
+):
+    """
+    Generate a camera trajectory where the camera orbits around the target's central axis,
+    with orbital and pitch amplitudes gradually decreasing as it moves forward.
+
+    Parameters:
+    - degree_start: initial orbital amplitude (degrees)
+    - degree_end: final orbital amplitude (degrees)
+    - nviews: number of trajectory points
+    - rounds: total number of orbital revolutions
+    - distance_start: starting camera-to-center distance
+    - distance_end: ending camera-to-center distance
+    - height_decay: decay coefficient for vertical displacement amplitude over progression
+
+    Returns:
+    - render_poses: ndarray of shape (nviews, 3, 4), camera [R|t] poses for each frame
+    """
+    assert rounds > 0
+    # Normalize progress from 0 to 1
+    t = np.linspace(0, 1, nviews)
+
+    # Linearly interpolate amplitude and distance
+    amp = degree_start * (1 - t) + degree_end * t
+    d = distance_start * (1 - t) + distance_end * t
+
+    # Angle sequences: orbit (theta) and pitch (phi)
+    theta = amp * np.sin(2 * np.pi * rounds * t)
+    phi = amp * np.cos(2 * np.pi * rounds * t)
+
+    # Small vertical oscillation with decay
+    z_offset = height_decay * distance_start * np.sin(2 * np.pi * rounds * t) * (1 - t)
+
+    # Initialize pose storage
+    render_poses = np.zeros((nviews, 3, 4))
+
+    for i in range(nviews):
+        th = np.deg2rad(theta[i])
+        ph = np.deg2rad(phi[i])
+        Z = z_offset[i]
+        Di = d[i]
+
+        # Rotation matrices around Y (yaw) and X (pitch)
+        R_y = np.array([
+            [np.cos(th), 0, -np.sin(th)],
+            [0, 1, 0],
+            [np.sin(th), 0, np.cos(th)],
+        ])
+        R_x = np.array([
+            [1, 0, 0],
+            [0, np.cos(ph), -np.sin(ph)],
+            [0, np.sin(ph),  np.cos(ph)],
+        ])
+        R = R_y @ R_x
+        render_poses[i, :3, :3] = R
+
+        # Translation components: horizontal, vertical, and z-offset
+        t_horiz = np.array([Di * np.sin(th), 0, Di * np.cos(th)])
+        t_vert = np.array([0, Di * np.sin(ph), 0])
+        t_z = np.array([0, 0, Z])
+
+        render_poses[i, :3, 3] = t_horiz + t_vert + t_z
+
+    return render_poses
+
+
+def get_pcdGenPoses(pcdgenpath, argdict={}, scale=1):
     if pcdgenpath == "rotate360":
-        render_poses = generate_seed_360(360, 10)
+        render_poses = generate_seed_360(360, 10, scale=scale)
     elif pcdgenpath == "lookaround":
-        render_poses = generate_seed_preset()
+        render_poses = generate_seed_preset(scale=scale)
     elif pcdgenpath == "moveright":
         render_poses = generate_seed_horizon()
     elif pcdgenpath == "moveback":
@@ -1564,17 +1623,20 @@ def get_pcdGenPoses(pcdgenpath, argdict={}):
     elif pcdgenpath == "arc":
         render_poses = generate_seed_arc()
     elif pcdgenpath == "lookdown":
-        render_poses = generate_seed_newpreset()
+        render_poses = generate_seed_newpreset(scale=scale)
     elif pcdgenpath == "hemisphere":
-        render_poses = generate_seed_hemisphere(argdict["center_depth"])
+        render_poses = generate_seed_hemisphere(argdict["center_depth"], scale=scale)
     else:
         raise ("Invalid pcdgenpath")
     return render_poses
 
 
-def get_camerapaths():
+def getCameraPaths():
+    """
+    Precompute all camera trajectories for rendering videos
+    """
     preset_json = {}
-    for cam_path in ["back_and_forth", "llff", "headbanging"]:
+    for cam_path in ["back_and_forth", "llff", "headbanging", "tapered"]:  # TODO
         if cam_path == "back_and_forth":
             render_poses = generate_seed_back()
         elif cam_path == "llff":
@@ -1583,6 +1645,8 @@ def get_camerapaths():
             render_poses = generate_seed_headbanging(
                 maxdeg=15, nviews_per_round=180, round=2, fullround=0
             )
+        elif cam_path == "tapered":
+            render_poses = generate_tapered_orbit()
         else:
             raise ("Unknown pass")
 
@@ -1590,7 +1654,7 @@ def get_camerapaths():
         blender_train_json = {"frames": []}
         for render_pose in render_poses:
             curr_frame = {}
-            ### Transform world to pixel
+            # Transform world to pixel
             Rw2i = render_pose[:3, :3]
             Tw2i = render_pose[:3, 3:4]
 

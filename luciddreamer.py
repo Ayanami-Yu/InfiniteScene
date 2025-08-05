@@ -262,9 +262,7 @@ class LucidDreamer:
             outfile = self.save_ply(os.path.join(self.save_dir, "gsplat.ply"))
         return outfile
 
-    def create_scene(
-        self, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p
-    ):
+    def create_scene(self, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p):
         # generate the initial zoom stack
         save_dir = f"{self.save_dir}/{self.version}"
         if not os.path.exists(save_dir):
@@ -280,24 +278,38 @@ class LucidDreamer:
                 viz_step=0,
             )  # a list of PIL images
             save_images(images, save_dir, txt_cond)
+        else:
+            images = [
+                Image.open(os.path.join(save_dir, img))
+                for img in sorted(os.listdir(save_dir))
+                if img.split("_")[0].isdigit()
+            ]
 
         # generate complete point clouds at all zoom-level
         self.traindata = None
+        fx, fy = self.cam.focal
         for i in range(len(images)):
-            self.cam.K = np.array([
-                [self.cam.focal[0] * (p**i), 0.0, self.cam.W / 2],
-                [0.0, self.cam.focal[1] * (p**i), self.cam.H / 2],
-                [0.0, 0.0, 1.0],
-            ]).astype(np.float32)
+            self.cam = CameraParams(focal=(fx * (p**i), fy * (p**i)))
             data = self.generate_pcd(
-                images[i], txt_cond[i], neg_txt_cond, pcdgenpath, seed, diff_steps
+                images[i],
+                txt_cond[i],
+                neg_txt_cond,
+                pcdgenpath,
+                seed,
+                diff_steps,
+                angle_scale=p**i,
             )
             if self.traindata is None:
                 self.traindata = data
             else:
-                # the values of camera_angle_x, W, and H remain the same
-                self.traindata["pcd_points"] = np.concatenate((self.traindata["pcd_points"], data["pcd_points"]), axis=-1)  # [3, N1 + N2]
-                self.traindata["pcd_colors"] = np.concatenate((self.traindata["pcd_colors"], data["pcd_colors"]), axis=0)  # [N1 + N2, 3]
+                # W and H remain the same
+                self.traindata["camera_angle_x"].extend(data["camera_angle_x"])
+                self.traindata["pcd_points"] = np.concatenate(
+                    (self.traindata["pcd_points"], data["pcd_points"]), axis=-1
+                )  # [3, N1 + N2]
+                self.traindata["pcd_colors"] = np.concatenate(
+                    (self.traindata["pcd_colors"], data["pcd_colors"]), axis=0
+                )  # [N1 + N2, 3]
                 self.traindata["frames"].extend(data["frames"])
 
         self.scene = Scene(self.traindata, self.gaussians, self.opt)
@@ -347,11 +359,13 @@ class LucidDreamer:
         if os.path.exists(videopath) and os.path.exists(depthpath):
             return videopath, depthpath
 
+        # all camera trajectories for rendering videos have already been calculated
+        # when initializing Scene object (in readDataInfo -> getCameraPaths)
         if not hasattr(self, "scene"):
             views = load_json(
                 os.path.join("cameras", f"{preset}.json"), self.cam.H, self.cam.W
             )
-        else:
+        else:  # TODO use zoom-in camera trajectories
             views = self.scene.getPresetCameras(preset)
 
         framelist = []
@@ -478,14 +492,14 @@ class LucidDreamer:
         seed,
         diff_steps,
         progress=gr.Progress(),
+        angle_scale=1,
     ):
         # processing inputs
         generator = torch.Generator(device="cuda").manual_seed(seed)
 
         w_in, h_in = rgb_cond.size
-        if (
-            w_in / h_in > 1.1 or h_in / w_in > 1.1
-        ):  # if height and width are similar, do center crop
+        # if height and width are similar, do center crop
+        if w_in / h_in > 1.1 or h_in / w_in > 1.1:
             in_res = max(w_in, h_in)
             image_in, mask_in = np.zeros(
                 (in_res, in_res, 3), dtype=np.uint8
@@ -529,14 +543,15 @@ class LucidDreamer:
                     (0, int(h_in / 2 - w_in / 2), w_in, int(h_in / 2 + w_in / 2))
                 ).resize((self.cam.W, self.cam.H))
 
-        render_poses = get_pcdGenPoses(pcdgenpath)
+        render_poses = get_pcdGenPoses(pcdgenpath, scale=angle_scale)
         depth_curr = self.d(image_curr)
         center_depth = np.mean(
-            # depth_curr[h_in // 2 - 10 : h_in // 2 + 10, w_in // 2 - 10 : w_in // 2 + 10]
-            depth_curr[self.cam.H // 2 - 10 : self.cam.H // 2 + 10, self.cam.W // 2 - 10 : self.cam.W // 2 + 10]
+            depth_curr[
+                self.cam.H // 2 - 10 : self.cam.H // 2 + 10,
+                self.cam.W // 2 - 10 : self.cam.W // 2 + 10,
+            ]
         )
 
-        ###################################################################################
         # Iterative scene generation
         H, W, K = self.cam.H, self.cam.W, self.cam.K
 
@@ -559,17 +574,13 @@ class LucidDreamer:
         )
         new_pts_coord_world2 = (
             np.linalg.inv(R0).dot(pts_coord_cam) - np.linalg.inv(R0).dot(T0)
-        ).astype(
-            np.float32
-        )  ## new_pts_coord_world2
-        new_pts_colors2 = (
-            np.array(image_curr).reshape(-1, 3).astype(np.float32) / 255.0
-        )  ## new_pts_colors2
+        ).astype(np.float32)
+        new_pts_colors2 = np.array(image_curr).reshape(-1, 3).astype(np.float32) / 255.0
 
         pts_coord_world, pts_colors = (
             new_pts_coord_world2.copy(),
             new_pts_colors2.copy(),
-        )
+        )  # initial point cloud P_0
 
         if self.for_gradio:
             progress(0, desc="[1/4] Dreaming...")
@@ -579,14 +590,12 @@ class LucidDreamer:
         else:
             iterable_dream = range(1, len(render_poses))
 
-        # iterable_dream = range(1, 4)  # TODO change the number back
         for i in iterable_dream:
             R, T = render_poses[i, :3, :3], render_poses[i, :3, 3:4]
 
             # transform world to pixel
-            pts_coord_cam2 = (
-                R.dot(pts_coord_world) + T
-            )  # same as c2w x world_coord (in homogeneous space)
+            # same as c2w x world_coord (in homogeneous space)
+            pts_coord_cam2 = R.dot(pts_coord_world) + T
             pixel_coord_cam2 = np.matmul(
                 K, pts_coord_cam2
             )  # [3, N] the previous 3D points in camera coord
@@ -602,7 +611,8 @@ class LucidDreamer:
                     )
                 )
             )[0]
-            pixel_coord_cam2 = (  # divide by z coord to get homogeneous coord
+            # divide by z coord to get homogeneous coord
+            pixel_coord_cam2 = (
                 pixel_coord_cam2[:2, valid_idx] / pixel_coord_cam2[-1:, valid_idx]
             )
             round_coord_cam2 = np.round(pixel_coord_cam2).astype(np.int32)
@@ -613,7 +623,7 @@ class LucidDreamer:
                 indexing="xy",
             )
             grid = np.stack((x, y), axis=-1).reshape(-1, 2)  # [N, 2] row-major
-            image2 = interp_grid(
+            image2 = interp_grid(  # FIXME no points given when i = 2
                 pixel_coord_cam2.transpose(1, 0),
                 pts_colors[valid_idx],
                 grid,
@@ -642,11 +652,10 @@ class LucidDreamer:
             )
             mask_hf = np.pad(mask_hf, ((0, 1), (0, 1)), "edge")
             mask_hf = np.where(mask_hf < 0.3, 0, 1)
+            # use valid_idx[border_valid_idx] for world1
             border_valid_idx = np.where(
                 mask_hf[round_coord_cam2[1], round_coord_cam2[0]] == 1
-            )[
-                0
-            ]  # use valid_idx[border_valid_idx] for world1
+            )[0]
 
             image_curr = self.rgb(  # inpainting  # I_i
                 prompt=prompt,
@@ -663,7 +672,6 @@ class LucidDreamer:
             sc = torch.ones(1).float().requires_grad_(True)  # d_i
             optimizer = torch.optim.Adam(params=[sc], lr=0.001)
 
-            # for idx in range(5):  # TODO change the number back
             for idx in range(100):  # d_i optimization loop
                 trans3d = torch.tensor(
                     [[sc, 0, 0, 0], [0, sc, 0, 0], [0, 0, sc, 0], [0, 0, 0, 1]]
@@ -727,6 +735,7 @@ class LucidDreamer:
                 )  # rectified \tilde{P}_i (no new points added)
 
             trans3d = trans3d.detach().numpy()
+
             # backproject new 3D points from inpainted region
             pts_coord_cam2 = np.matmul(
                 np.linalg.inv(K),
@@ -852,16 +861,16 @@ class LucidDreamer:
 
         yz_reverse = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
         traindata = {
-            "camera_angle_x": self.cam.fov[0],
+            "camera_angle_x": [],  # for intrinsics
             "W": W,
             "H": H,
             "pcd_points": pts_coord_world,  # for 3DGS init
             "pcd_colors": pts_colors,
-            "frames": [],
+            "frames": [],  # contains extrinsics
         }
 
         internal_render_poses = get_pcdGenPoses(
-            "hemisphere", {"center_depth": center_depth}
+            "hemisphere", {"center_depth": center_depth}, scale=angle_scale
         )
 
         if self.for_gradio:
@@ -893,9 +902,8 @@ class LucidDreamer:
                 Pc2w = np.concatenate((Rj2w, Tj2w), axis=1)
                 Pc2w = np.concatenate((Pc2w, np.array([[0, 0, 0, 1]])), axis=0)
 
-                pts_coord_camj = (
-                    Rw2j.dot(pts_coord_world) + Tw2j
-                )  # project P_N onto camj
+                # project P_N onto camj
+                pts_coord_camj = Rw2j.dot(pts_coord_world) + Tw2j
                 pixel_coord_camj = np.matmul(K, pts_coord_camj)
 
                 valid_idxj = np.where(
@@ -955,6 +963,7 @@ class LucidDreamer:
                 )
                 imagej = maskj[..., None] * imagej + (1 - maskj[..., None]) * 0
 
+                traindata["camera_angle_x"].append(self.cam.fov[0])
                 traindata["frames"].append(
                     {
                         "image": Image.fromarray(

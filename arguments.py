@@ -39,10 +39,10 @@ class GSParams:
 
 
 class CameraParams:
-    def __init__(self, H: int = 512, W: int = 512):
+    def __init__(self, focal=(5.8269e02, 5.8269e02), H: int = 512, W: int = 512):
         self.H = H
         self.W = W
-        self.focal = (5.8269e02, 5.8269e02)  # TODO why this hard-coded number
+        self.focal = focal  # TODO why this hard-coded number
         self.fov = (
             2 * np.arctan(self.W / (2 * self.focal[0])),
             2 * np.arctan(self.H / (2 * self.focal[1])),

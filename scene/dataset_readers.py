@@ -33,7 +33,7 @@ from scene.colmap_loader import (
 )
 from utils.graphics import getWorld2View2, focal2fov, fov2focal
 from utils.graphics import getProjectionMatrix
-from utils.trajectory import get_camerapaths
+from utils.trajectory import getCameraPaths
 from utils.sh import SH2RGB
 
 
@@ -434,7 +434,7 @@ def readNerfSyntheticInfo(path, white_background, eval, preset=None, extension="
 def loadCamerasFromData(traindata, white_background):
     cameras = []
 
-    fovx = traindata["camera_angle_x"]
+    # fovx = traindata["camera_angle_x"]
     frames = traindata["frames"]
     for idx, frame in enumerate(frames):
         # NeRF 'transform_matrix' is a camera-to-world transform
@@ -461,6 +461,7 @@ def loadCamerasFromData(traindata, white_background):
         image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
         loaded_mask = np.ones_like(norm_data[:, :, 3:4])
 
+        fovx = traindata["camera_angle_x"][idx]
         fovy = focal2fov(fov2focal(fovx, image.size[1]), image.size[0])
         FovY = fovy
         FovX = fovx
@@ -489,10 +490,10 @@ def loadCamerasFromData(traindata, white_background):
 
 def loadCameraPreset(traindata, presetdata):
     cam_infos = {}
-    ## camera setting (for H, W and focal)
-    fovx = traindata["camera_angle_x"] * 1.2
     W, H = traindata["frames"][0]["image"].size
-    # W, H = traindata["W"], traindata["H"]
+    fovx = (
+        traindata["camera_angle_x"][0] * 1.2
+    )  # the focal corresponding to most zoomed-out view
 
     for camkey in presetdata:
         cam_infos[camkey] = []
@@ -548,11 +549,7 @@ def readDataInfo(traindata, white_background):
     print("Reading Training Transforms")
 
     train_cameras = loadCamerasFromData(traindata, white_background)
-    preset_minicams = loadCameraPreset(traindata, presetdata=get_camerapaths())
-
-    # if not eval:
-    #     train_cam_infos.extend(test_cam_infos)
-    #     test_cam_infos = []
+    preset_minicams = loadCameraPreset(traindata, presetdata=getCameraPaths())
 
     nerf_normalization = getNerfppNorm(train_cameras)
 
