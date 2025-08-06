@@ -1,0 +1,8 @@
+# Build CuPy from GitHub source because the pip package does not include 
+# `LinearNDInterpolator` and `NearestNDInterpolator` in cupyx.scipy.interpolate
+# To install CuPy from source:
+# $ cd cupy
+# $ pip install .
+[submodule "submodules/cupy"]
+	path = submodules/cupy
+	url = https://github.com/cupy/cupy.git

@@ -1545,7 +1545,7 @@ def generate_tapered_orbit(  # TODO test
     rounds=2,
     distance_start=5,
     distance_end=2,
-    height_decay=0.5
+    height_decay=0.5,
 ):
     """
     Generate a camera trajectory where the camera orbits around the target's central axis,
@@ -1588,16 +1588,20 @@ def generate_tapered_orbit(  # TODO test
         Di = d[i]
 
         # Rotation matrices around Y (yaw) and X (pitch)
-        R_y = np.array([
-            [np.cos(th), 0, -np.sin(th)],
-            [0, 1, 0],
-            [np.sin(th), 0, np.cos(th)],
-        ])
-        R_x = np.array([
-            [1, 0, 0],
-            [0, np.cos(ph), -np.sin(ph)],
-            [0, np.sin(ph),  np.cos(ph)],
-        ])
+        R_y = np.array(
+            [
+                [np.cos(th), 0, -np.sin(th)],
+                [0, 1, 0],
+                [np.sin(th), 0, np.cos(th)],
+            ]
+        )
+        R_x = np.array(
+            [
+                [1, 0, 0],
+                [0, np.cos(ph), -np.sin(ph)],
+                [0, np.sin(ph), np.cos(ph)],
+            ]
+        )
         R = R_y @ R_x
         render_poses[i, :3, :3] = R
 
