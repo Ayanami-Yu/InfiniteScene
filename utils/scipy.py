@@ -1,9 +1,13 @@
 import torch
+
 # from scipy.interpolate import griddata
 # from scipy.ndimage import minimum_filter as min_filter, maximum_filter as max_filter
 import cupy as cp
 from cupyx.scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
-from cupyx.scipy.ndimage import minimum_filter as min_filter, maximum_filter as max_filter
+from cupyx.scipy.ndimage import (
+    minimum_filter as min_filter,
+    maximum_filter as max_filter,
+)
 
 
 def interp_grid(points, values, grid, method="linear", fill_value=0):

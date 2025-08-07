@@ -8,9 +8,8 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
-import numpy as np
-
 import torch
+import numpy as np
 from torch import nn
 
 from utils.graphics import getWorld2View2, getProjectionMatrix
@@ -104,6 +103,7 @@ class MiniCam:
         world_view_transform,
         full_proj_transform,
     ):
+        """Camera intrinsics and extrinsics in the format that 3DGS requires"""
         self.image_width = width
         self.image_height = height
         self.FoVy = fovy

@@ -15,7 +15,13 @@ import torch
 
 from scene.cameras import Camera, MiniCam
 from utils.general import PILtoTorch
-from utils.graphics import fov2focal, focal2fov, getWorld2View, getProjectionMatrix
+from utils.graphics import (
+    fov2focal,
+    focal2fov,
+    getWorld2View,
+    getProjectionMatrix,
+    getWorld2View2,
+)
 
 
 WARNED = False
@@ -132,3 +138,47 @@ def camera_to_JSON(id, camera: Camera):
         "fx": fov2focal(camera.FovX, camera.width),
     }
     return camera_entry
+
+
+def get_minicam(fovx, c2w, W, H):
+    """
+    Params:
+        c2w: np.ndarray Camera to world transformation.
+    """
+    # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+    c2w[:3, 1:3] *= -1
+
+    # get the world-to-camera transform and set R, T
+    w2c = np.linalg.inv(c2w)
+    R = np.transpose(w2c[:3, :3])  # R is stored transposed due to 'glm' in CUDA code
+    T = w2c[:3, 3]
+
+    fovy = focal2fov(fov2focal(fovx, W), H)
+    FovY = fovy
+    FovX = fovx
+
+    znear, zfar = 0.01, 100
+    world_view_transform = (
+        torch.tensor(getWorld2View2(R, T, np.array([0.0, 0.0, 0.0]), 1.0))
+        .transpose(0, 1)
+        .cuda()
+    )
+    projection_matrix = (
+        getProjectionMatrix(znear=znear, zfar=zfar, fovX=FovX, fovY=FovY)
+        .transpose(0, 1)
+        .cuda()
+    )
+    full_proj_transform = (
+        world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))
+    ).squeeze(0)
+
+    return MiniCam(
+        width=W,
+        height=H,
+        fovy=FovY,
+        fovx=FovX,
+        znear=znear,
+        zfar=zfar,
+        world_view_transform=world_view_transform,
+        full_proj_transform=full_proj_transform,
+    )

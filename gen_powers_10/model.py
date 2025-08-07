@@ -162,14 +162,20 @@ class GenPowers10Pipeline(nn.Module):
         prompts,
         negative_prompt,
         p,
-        dir,
+        save_dir=None,
         num_inference_steps=50,
         guidance_scale=7.5,
         photograph=None,
         generator=None,
         viz_step=10,
     ):
-
+        """
+        Params:
+            prompts: A list of strings. len(prompts) will be the number of zoom-in levels.
+            save_dir: The folder path to save collage images. If not provided, save_collage will not be called.
+        Returns:
+            A list of PIL images, each corresponding to one zoom-in level.
+        """
         height = 64
         width = 64
         num_levels = len(prompts)
@@ -260,7 +266,11 @@ class GenPowers10Pipeline(nn.Module):
                 viz_images = viz_images.cpu().permute(0, 2, 3, 1).float().numpy()
                 viz_images = numpy_to_pil(viz_images)
                 save_collage(
-                    viz_images, os.path.join(dir, "steps"), height, width, f"{counter}"
+                    viz_images,
+                    os.path.join(save_dir, "steps"),
+                    height,
+                    width,
+                    f"{counter}",
                 )
 
         stage_1_output = torch.stack(
@@ -269,7 +279,8 @@ class GenPowers10Pipeline(nn.Module):
         images = (stage_1_output / 2 + 0.5).clamp(0, 1)
         images = images.cpu().permute(0, 2, 3, 1).float().numpy()
         images = numpy_to_pil(images)
-        save_collage(images, dir, height, width, f"collage_{height}_{width}")
+        if save_dir:
+            save_collage(images, save_dir, height, width, f"collage_{height}_{width}")
 
         # stage 2
         print("[INFO] upscaling stage 2")
@@ -293,7 +304,8 @@ class GenPowers10Pipeline(nn.Module):
         images = (zoom_stack.L / 2 + 0.5).clamp(0, 1)
         images = images.cpu().permute(0, 2, 3, 1).float().numpy()
         images = numpy_to_pil(images)
-        save_collage(images, dir, 256, 256, f"collage_256_256")
+        if save_dir:
+            save_collage(images, save_dir, 256, 256, f"collage_256_256")
 
         # stage 3
         print("[INFO] upscaling stage 3")
@@ -320,7 +332,8 @@ class GenPowers10Pipeline(nn.Module):
 
             upscaled_images.extend(batch_upscaled)
 
-        save_collage(upscaled_images, dir, 1024, 1024, f"collage_1024_1024")
-        print(f"[INFO] saved images to {dir}.")
+        if save_dir:
+            save_collage(upscaled_images, save_dir, 1024, 1024, f"collage_1024_1024")
+        print(f"[INFO] saved images to {save_dir}.")
 
         return upscaled_images

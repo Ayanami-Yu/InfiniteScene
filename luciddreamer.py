@@ -41,8 +41,6 @@ from utils.camera import load_json
 from utils.depth import colorize
 from utils.lama import LaMa
 from utils.trajectory import get_pcdGenPoses
-from gen_powers_10.model import GenPowers10Pipeline
-from gen_powers_10.utils import save_images
 
 
 get_kernel = lambda p: torch.ones(1, 1, p * 2 + 1, p * 2 + 1).to("cuda")
@@ -62,7 +60,7 @@ pad_mask = lambda x, padamount=1: t2np(
 
 
 class LucidDreamer:
-    def __init__(self, for_gradio=True, save_dir=None, version="DFIF_XL_L_X4"):
+    def __init__(self, for_gradio=True, save_dir=None):
         self.opt = GSParams()
         self.cam = CameraParams()
         self.save_dir = save_dir
@@ -90,7 +88,6 @@ class LucidDreamer:
             pretrained=True,
             load_local=True,
         ).to("cuda")
-        self.version = version
         self.controlnet = None
         self.lama = None
         self.current_model = self.default_model
@@ -231,7 +228,6 @@ class LucidDreamer:
         diff_steps,
         model_name=None,
         example_name=None,
-        p=None,
     ):
         if self.for_gradio:
             self.cleaner()
@@ -239,80 +235,23 @@ class LucidDreamer:
         if example_name and example_name != "DON'T":  # False
             outfile = os.path.join("examples", f"{example_name}.ply")
             if not os.path.exists(outfile):
-                self.traindata = self.generate_pcd(
+                traindata = self.generate_pcd_torch(
                     rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps
                 )
-                self.scene = Scene(self.traindata, self.gaussians, self.opt)
+                self.scene = Scene(traindata, self.gaussians, self.opt)
                 self.training()
             outfile = self.save_ply(outfile)
-        elif rgb_cond and type(txt_cond) is str:
-            self.traindata = self.generate_pcd_torch(  # TODO test
+        else:
+            traindata = self.generate_pcd_torch(
                 rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps
             )
-            self.scene = Scene(self.traindata, self.gaussians, self.opt)
+            self.scene = Scene(traindata, self.gaussians, self.opt)
             self.training()
             self.timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
             if not os.path.exists(self.save_dir):
                 os.makedirs(self.save_dir)
             outfile = self.save_ply(os.path.join(self.save_dir, "gsplat.ply"))
-        else:  # use Powers of Ten
-            self.create_scene(txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p)
-            os.makedirs(self.save_dir, exist_ok=True)
-            outfile = self.save_ply(os.path.join(self.save_dir, "gsplat.ply"))
         return outfile
-
-    def create_scene(self, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p):
-        # generate the initial zoom stack
-        save_dir = f"{self.save_dir}/{self.version}"
-        if not os.path.exists(save_dir):
-            self.zoom_model = GenPowers10Pipeline(self.version)
-            images = self.zoom_model(
-                txt_cond,
-                neg_txt_cond,
-                p,
-                save_dir,
-                num_inference_steps=diff_steps,
-                guidance_scale=7,
-                photograph=None,
-                viz_step=0,
-            )  # a list of PIL images
-            save_images(images, save_dir, txt_cond)
-        else:
-            images = [
-                Image.open(os.path.join(save_dir, img))
-                for img in sorted(os.listdir(save_dir))
-                if img.split("_")[0].isdigit()
-            ]
-
-        # generate complete point clouds at all zoom-level
-        self.traindata = None
-        fx, fy = self.cam.focal
-        for i in range(len(images)):
-            self.cam = CameraParams(focal=(fx * (p**i), fy * (p**i)))
-            data = self.generate_pcd_torch(
-                images[i],
-                txt_cond[i],
-                neg_txt_cond,
-                pcdgenpath,
-                seed,
-                diff_steps,
-                angle_scale=p**i,
-            )
-            if self.traindata is None:
-                self.traindata = data
-            else:
-                # W and H remain the same
-                self.traindata["camera_angle_x"].extend(data["camera_angle_x"])
-                self.traindata["pcd_points"] = np.concatenate(
-                    (self.traindata["pcd_points"], data["pcd_points"]), axis=-1
-                )  # [3, N1 + N2]
-                self.traindata["pcd_colors"] = np.concatenate(
-                    (self.traindata["pcd_colors"], data["pcd_colors"]), axis=0
-                )  # [N1 + N2, 3]
-                self.traindata["frames"].extend(data["frames"])
-
-        self.scene = Scene(self.traindata, self.gaussians, self.opt)
-        self.training()
 
     def save_ply(self, fpath=None):
         if fpath is None:
@@ -542,7 +481,7 @@ class LucidDreamer:
                     (0, int(h_in / 2 - w_in / 2), w_in, int(h_in / 2 + w_in / 2))
                 ).resize((self.cam.W, self.cam.H))
 
-        render_poses = get_pcdGenPoses(pcdgenpath, scale=angle_scale)
+        render_poses = get_pcdGenPoses(pcdgenpath, deg_denom=angle_scale)
         depth_curr = self.d(image_curr)
         center_depth = np.mean(
             depth_curr[
@@ -869,7 +808,7 @@ class LucidDreamer:
         }
 
         internal_render_poses = get_pcdGenPoses(
-            "hemisphere", {"center_depth": center_depth}, scale=angle_scale
+            "hemisphere", {"center_depth": center_depth}, deg_denom=angle_scale
         )
 
         if self.for_gradio:
@@ -984,10 +923,15 @@ class LucidDreamer:
         seed,
         diff_steps,
         progress=gr.Progress(),
-        angle_scale=1,
+        deg_scale=1,
         dtype=torch.float32,
         device="cuda",
     ):
+        """
+        Params:
+            pcdgenpath: Union[str, np.ndarray]
+                Either the name of the camera trajectory or an np.ndarray of shape [N, 3, 4] that corresponds to a series of camera poses.
+        """
         # processing inputs
         generator = torch.Generator(device=device).manual_seed(seed)
 
@@ -1038,7 +982,13 @@ class LucidDreamer:
                 ).resize((self.cam.W, self.cam.H))
 
         render_poses = torch.tensor(
-            get_pcdGenPoses(pcdgenpath, scale=angle_scale), dtype=dtype, device=device
+            (
+                get_pcdGenPoses(pcdgenpath, deg_denom=deg_scale)
+                if type(pcdgenpath) is str
+                else pcdgenpath
+            ),
+            dtype=dtype,
+            device=device,
         )
         depth_curr = self.d(image_curr_pil)
         center_depth_np = np.mean(
@@ -1371,7 +1321,7 @@ class LucidDreamer:
 
         internal_render_poses = torch.tensor(
             get_pcdGenPoses(
-                "hemisphere", {"center_depth": center_depth_np}, scale=angle_scale
+                "hemisphere", {"center_depth": center_depth_np}, deg_denom=deg_scale
             ),
             dtype=dtype,
             device=device,
@@ -1450,7 +1400,11 @@ class LucidDreamer:
                 imagej_CHW = imagej.permute(2, 0, 1)
                 imagej = edgemask[..., None] * imagej + (
                     1 - edgemask[..., None]
-                ) * F.pad(imagej_CHW[:, 1:-1, 1:-1], (1, 1, 1, 1), mode="replicate").permute(1, 2, 0)
+                ) * F.pad(
+                    imagej_CHW[:, 1:-1, 1:-1], (1, 1, 1, 1), mode="replicate"
+                ).permute(
+                    1, 2, 0
+                )
 
                 depthj = interp_grid(
                     pixel_coord_camj.transpose(1, 0),

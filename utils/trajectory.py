@@ -879,8 +879,8 @@ def generate_seed(scale, viewangle):
     return render_poses
 
 
-def generate_seed_360(viewangle, n_views, scale=1):
-    N = n_views * scale
+def generate_seed_360(viewangle, n_views, deg_denom=1):
+    N = n_views * deg_denom
     render_poses = np.zeros((N, 3, 4))
     for i in range(N):
         th = (viewangle / N) * i / 180 * np.pi
@@ -911,9 +911,9 @@ def generate_seed_360_half(viewangle, n_views):
     return render_poses
 
 
-def generate_seed_preset(scale=1):
-    th_max = 60 / scale
-    phi_max = 22.5 / scale
+def generate_seed_preset(deg_denom=1):
+    th_max = 60 / deg_denom
+    phi_max = 22.5 / deg_denom
     thlist = np.concatenate(  # in degree
         (
             np.linspace(0, th_max, 4),
@@ -959,9 +959,9 @@ def generate_seed_preset(scale=1):
     return render_poses
 
 
-def generate_seed_newpreset(scale=1):
-    th_max = 60 / scale
-    phi_max = 22.5 / scale
+def generate_seed_newpreset(deg_denom=1):
+    th_max = 60 / deg_denom
+    phi_max = 22.5 / deg_denom
     thlist = np.concatenate(
         (
             np.linspace(0, th_max, 4),
@@ -1058,8 +1058,8 @@ def generate_seed_arc():
     return render_poses
 
 
-def generate_seed_hemisphere(center_depth, degree=5, scale=1):
-    degree = 5 / scale
+def generate_seed_hemisphere(center_depth, degree=5, deg_denom=1):
+    degree = 5 / deg_denom
     thlist = np.array([degree, 0, 0, 0, -degree])
     philist = np.array([0, -degree, 0, degree, 0])
     assert len(thlist) == len(philist)
@@ -1543,8 +1543,8 @@ def generate_tapered_orbit(  # TODO test
     degree_end=0.5,
     nviews=400,
     rounds=2,
-    distance_start=5,
-    distance_end=2,
+    distance_start=1,
+    distance_end=0.1,
     height_decay=0.5,
 ):
     """
@@ -1615,11 +1615,11 @@ def generate_tapered_orbit(  # TODO test
     return render_poses
 
 
-def get_pcdGenPoses(pcdgenpath, argdict={}, scale=1):
+def get_pcdGenPoses(pcdgenpath, argdict={}, deg_denom=1):
     if pcdgenpath == "rotate360":
-        render_poses = generate_seed_360(360, 10, scale=scale)
+        render_poses = generate_seed_360(360, 10, deg_denom=deg_denom)
     elif pcdgenpath == "lookaround":
-        render_poses = generate_seed_preset(scale=scale)
+        render_poses = generate_seed_preset(deg_denom=deg_denom)
     elif pcdgenpath == "moveright":
         render_poses = generate_seed_horizon()
     elif pcdgenpath == "moveback":
@@ -1627,9 +1627,11 @@ def get_pcdGenPoses(pcdgenpath, argdict={}, scale=1):
     elif pcdgenpath == "arc":
         render_poses = generate_seed_arc()
     elif pcdgenpath == "lookdown":
-        render_poses = generate_seed_newpreset(scale=scale)
+        render_poses = generate_seed_newpreset(deg_denom=deg_denom)
     elif pcdgenpath == "hemisphere":
-        render_poses = generate_seed_hemisphere(argdict["center_depth"], scale=scale)
+        render_poses = generate_seed_hemisphere(
+            argdict["center_depth"], deg_denom=deg_denom
+        )
     else:
         raise ("Invalid pcdgenpath")
     return render_poses

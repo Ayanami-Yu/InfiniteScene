@@ -54,7 +54,7 @@ class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
     train_cameras: list
     test_cameras: list
-    preset_cameras: list
+    preset_cameras: dict
     nerf_normalization: dict
     ply_path: str
 
@@ -469,7 +469,6 @@ def loadCamerasFromData(traindata, white_background):
         image = torch.Tensor(arr).permute(2, 0, 1)
         loaded_mask = None  # torch.Tensor(loaded_mask).permute(2,0,1)
 
-        ### torch로 바꿔야함
         cameras.append(
             Camera(
                 colmap_id=idx,
@@ -497,7 +496,7 @@ def loadCameraPreset(traindata, presetdata):
 
     for camkey in presetdata:
         cam_infos[camkey] = []
-        for idx, frame in enumerate(presetdata[camkey]["frames"]):
+        for frame in presetdata[camkey]["frames"]:
             # NeRF 'transform_matrix' is a camera-to-world transform
             c2w = np.array(frame["transform_matrix"])
             # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
@@ -529,6 +528,7 @@ def loadCameraPreset(traindata, presetdata):
                 world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))
             ).squeeze(0)
 
+            # format that 3DGS renderer requires
             cam_infos[camkey].append(
                 MiniCam(
                     width=W,
