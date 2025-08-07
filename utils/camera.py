@@ -9,7 +9,6 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 import json
-
 import numpy as np
 import torch
 
@@ -140,22 +139,23 @@ def camera_to_JSON(id, camera: Camera):
     return camera_entry
 
 
-def get_minicam(fovx, c2w, W, H):
+def get_render_cam(focalx, c2w, H, W):
     """
     Params:
         c2w: np.ndarray Camera to world transformation.
     """
     # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
-    c2w[:3, 1:3] *= -1
+    # copy so that the original c2w won't be modified
+    c2w_tmp = c2w.copy()
+    c2w_tmp[:3, 1:3] *= -1
 
     # get the world-to-camera transform and set R, T
-    w2c = np.linalg.inv(c2w)
+    w2c = np.linalg.inv(c2w_tmp)
     R = np.transpose(w2c[:3, :3])  # R is stored transposed due to 'glm' in CUDA code
     T = w2c[:3, 3]
 
+    fovx = focal2fov(focalx, W)
     fovy = focal2fov(fov2focal(fovx, W), H)
-    FovY = fovy
-    FovX = fovx
 
     znear, zfar = 0.01, 100
     world_view_transform = (
@@ -164,7 +164,7 @@ def get_minicam(fovx, c2w, W, H):
         .cuda()
     )
     projection_matrix = (
-        getProjectionMatrix(znear=znear, zfar=zfar, fovX=FovX, fovY=FovY)
+        getProjectionMatrix(znear=znear, zfar=zfar, fovX=fovx, fovY=fovy)
         .transpose(0, 1)
         .cuda()
     )
@@ -175,10 +175,38 @@ def get_minicam(fovx, c2w, W, H):
     return MiniCam(
         width=W,
         height=H,
-        fovy=FovY,
-        fovx=FovX,
+        fovy=fovy,
+        fovx=fovx,
         znear=znear,
         zfar=zfar,
         world_view_transform=world_view_transform,
         full_proj_transform=full_proj_transform,
     )
+
+
+def get_train_cam(img, focalx, c2w, H, W, white_background: bool, idx=0):
+    """
+    Params:
+        img: The GT image corresponding to that view. That is, the image projected/interpolated from colored point cloud in `generate_pcd`, or the zoomed-in image.
+    """
+    # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+    c2w_tmp = c2w.copy()
+    c2w_tmp[:3, 1:3] *= -1
+
+    # get the world-to-camera transform and set R, T
+    w2c = np.linalg.inv(c2w_tmp)
+    R = np.transpose(
+        w2c[:3, :3]
+    )  # R is stored transposed due to 'glm' in CUDA code
+    T = w2c[:3, 3]
+
+    bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
+
+    fovx = focal2fov(focalx, W)
+    fovy = focal2fov(fov2focal(fovx, W), H)
+
+    img = np.array(img.convert("RGBA")) / 255.0
+    img = img[:, :, :3] * img[:, :, 3:4] + bg * (1 - img[:, :, 3:4])
+    img = torch.Tensor(img).permute(2, 0, 1)
+
+    return Camera(colmap_id=idx, R=R, T=T, FoVx=fovx, FoVy=fovy, image=img, gt_alpha_mask=None, image_name='', uid=idx, data_device='cuda')

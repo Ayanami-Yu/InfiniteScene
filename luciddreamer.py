@@ -60,9 +60,9 @@ pad_mask = lambda x, padamount=1: t2np(
 
 
 class LucidDreamer:
-    def __init__(self, for_gradio=True, save_dir=None):
-        self.opt = GSParams()
+    def __init__(self, for_gradio=True, save_dir=None, torch_hub_local=True):
         self.cam = CameraParams()
+        self.opt = GSParams()
         self.save_dir = save_dir
         self.for_gradio = for_gradio
         self.root = "outputs"
@@ -80,13 +80,12 @@ class LucidDreamer:
             # revision="fp16",
             torch_dtype=torch.float16,
         ).to("cuda")
-        # 'stablediffusion/SD1-5', revision='fp16', torch_dtype=torch.float16).to('cuda')
         self.d_model = torch.hub.load(
             "./ZoeDepth",
             "ZoeD_N",
-            source="local",
+            source="local" if torch_hub_local else "github",
             pretrained=True,
-            load_local=True,
+            load_local=torch_hub_local,
         ).to("cuda")
         self.controlnet = None
         self.lama = None
@@ -342,7 +341,11 @@ class LucidDreamer:
             imageio.mimwrite(depthpath, depthlist, fps=60, quality=8)
         return videopath, depthpath
 
-    def training(self, progress=gr.Progress()):
+    def training(self, progress=gr.Progress(), cameras=None):
+        """
+        Params:
+            cameras: List[Camera] If not provided, self.scene.train_cameras will be used.
+        """
         if not self.scene:
             raise ("Build 3D Scene First!")
 
@@ -361,7 +364,7 @@ class LucidDreamer:
                 self.gaussians.oneupSHdegree()
 
             # Pick a random Camera
-            viewpoint_stack = self.scene.getTrainCameras().copy()
+            viewpoint_stack = self.scene.getTrainCameras().copy() if not cameras else cameras.copy()
             viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
 
             # import pdb; pdb.set_trace()
@@ -924,15 +927,14 @@ class LucidDreamer:
         diff_steps,
         progress=gr.Progress(),
         deg_scale=1,
-        dtype=torch.float32,
-        device="cuda",
     ):
         """
         Params:
-            pcdgenpath: Union[str, np.ndarray]
-                Either the name of the camera trajectory or an np.ndarray of shape [N, 3, 4] that corresponds to a series of camera poses.
+            pcdgenpath: Union[str, Tensor]
+                Either the name of the camera trajectory or a torch tensor of shape [N, 3, 4] that corresponds to a series of camera poses.
         """
         # processing inputs
+        dtype, device = self.dtype, self.device
         generator = torch.Generator(device=device).manual_seed(seed)
 
         w_in, h_in = rgb_cond.size
@@ -984,12 +986,10 @@ class LucidDreamer:
         render_poses = torch.tensor(
             (
                 get_pcdGenPoses(pcdgenpath, deg_denom=deg_scale)
-                if type(pcdgenpath) is str
-                else pcdgenpath
             ),
             dtype=dtype,
             device=device,
-        )
+        ) if type(pcdgenpath) is str else pcdgenpath
         depth_curr = self.d(image_curr_pil)
         center_depth_np = np.mean(
             depth_curr[
@@ -1003,8 +1003,8 @@ class LucidDreamer:
         H, W, K = self.cam.H, self.cam.W, torch.tensor(self.cam.K, device=device)
         K_inv = torch.linalg.inv(K)
         x, y = torch.meshgrid(
-            torch.arange(W, dtype=torch.float32, device=device),
-            torch.arange(H, dtype=torch.float32, device=device),
+            torch.arange(W, dtype=dtype, device=device),
+            torch.arange(H, dtype=dtype, device=device),
             indexing="xy",
         )  # pixels
         edgeN = 2
@@ -1023,6 +1023,7 @@ class LucidDreamer:
         new_pts_coord_world2 = R0_inv @ pts_coord_cam - R0_inv @ T0
         new_pts_colors2 = image_curr.reshape(-1, 3) / 255.0
 
+        # pts_colors will be used to initialize the colors of corresponding 3D points. It remains the same during projecting points to/from 3D, because the correspondence between a color and a point remains binded.
         pts_coord_world, pts_colors = (
             new_pts_coord_world2.clone(),
             new_pts_colors2.clone(),

@@ -5,4 +5,4 @@
 # $ pip install .
 [submodule "submodules/cupy"]
 	path = submodules/cupy
-	url = https://github.com/cupy/cupy.git
+	url = https://github.com/Ayanami-Yu/cupy.git

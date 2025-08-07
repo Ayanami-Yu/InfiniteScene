@@ -1616,6 +1616,9 @@ def generate_tapered_orbit(  # TODO test
 
 
 def get_pcdGenPoses(pcdgenpath, argdict={}, deg_denom=1):
+    """
+    Returns: np.ndarray[N, 3, 4] where N is the number of camera poses.
+    """
     if pcdgenpath == "rotate360":
         render_poses = generate_seed_360(360, 10, deg_denom=deg_denom)
     elif pcdgenpath == "lookaround":

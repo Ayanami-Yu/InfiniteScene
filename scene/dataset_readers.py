@@ -488,6 +488,9 @@ def loadCamerasFromData(traindata, white_background):
 
 
 def loadCameraPreset(traindata, presetdata):
+    """
+    Returns: Dict[str, List[MiniCam]] The keys are the names of camera trajectories.
+    """
     cam_infos = {}
     W, H = traindata["frames"][0]["image"].size
     fovx = (
