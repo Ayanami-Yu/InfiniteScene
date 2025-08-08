@@ -1617,7 +1617,7 @@ def generate_tapered_orbit(  # TODO test
 
 def generate_diving():  # TODO
     # z-axis of camera points backward, so `movement` should be negative to make camera move forward
-    movement = np.linspace(0, -10, 401)
+    movement = np.linspace(0, -2, 201)
     render_poses = []
     for i in range(len(movement)):
         render_pose = np.zeros((3, 4))

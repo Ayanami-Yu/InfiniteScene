@@ -63,7 +63,7 @@ class Dreamer(LucidDreamer):
         return outfile
 
     def create_scene(
-        self, rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p
+        self, rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p, save_imgs=True
     ):
         # generate camera trajectory
         num_levels = len(txt_cond)
@@ -101,7 +101,7 @@ class Dreamer(LucidDreamer):
         # zoom in (forward in a straight line)
         to_pil = transforms.ToPILImage()
         for i in range(num_levels - 1):
-            img_cur = render(cam_render[i], self.gaussians, self.opt, self.background)["render"]  # FIXME all-black image
+            img_cur = render(cam_render[i], self.gaussians, self.opt, self.background)["render"]
             img_zoomed = self.zoom_model(
                 txt_cond[i : i + 2],
                 neg_txt_cond,
@@ -111,12 +111,16 @@ class Dreamer(LucidDreamer):
                 photograph=to_pil(img_cur),
                 viz_step=0,
             )[1]
-            img_zoomed = self.resize_image(img_zoomed)
+            if save_imgs:
+                save_dir = f"{self.save_dir}/{self.version}"
+                save_images(to_pil(img_cur), save_dir, name=f"{i}_render_{txt_cond[i]}.png")
+                save_images(img_zoomed, save_dir, name=f"{i + 1}_zoom_{txt_cond[i + 1]}.png")
+
             # TODO test results of ZoeDepth
+            img_zoomed = self.resize_image(img_zoomed)
             points_new, colors_new = self.backproject(
                 image=img_zoomed, K=cam_intri[i], cam_pose=torch.tensor(cam_extri[0], dtype=self.dtype, device=self.device)
             )
-
             # merge Gaussians and jointly train
             cam_train = get_train_cam(
                 img=img_zoomed,
@@ -132,6 +136,12 @@ class Dreamer(LucidDreamer):
                 opt=self.opt,
             )
             self.training(cameras=[cam_train])
+
+        # save video using the zoom-in trajectory with interpolated cameras
+        focals = np.linspace(focalx[0], focalx[num_levels - 1], 201)
+        z_scales = [f / focalx[0] for f in focals]
+        minicams = [get_render_cam(focalx=f, c2w=c2w, H=H, W=W, z_scale=z_s) for f, z_s in zip(focals, z_scales)]
+        self.render_video(minicams, "zoom")
 
     def create_scene_v2(
         self, rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p

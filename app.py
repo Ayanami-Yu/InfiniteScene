@@ -263,7 +263,7 @@ with gr.Blocks(css=css) as demo:
         fn=ld.create, inputs=ips[1:-2] + ips[-1:] + ips[:1], outputs=[result_ply_file]
     )
     render_button.click(
-        fn=ld.render_video,
+        fn=ld.render_video_preset,
         inputs=ips[-2:-1] + ips[:1],
         outputs=[result_gallery, result_depth],
     )

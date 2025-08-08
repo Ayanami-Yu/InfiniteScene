@@ -214,7 +214,7 @@ class LucidDreamer:
             model_name,
             example_name,
         )
-        gallery, depth = self.render_video(render_camerapath, example_name=example_name)
+        gallery, depth = self.render_video_preset(render_camerapath, example_name=example_name)
         return (gaussians, gallery, depth)
 
     def create(
@@ -279,7 +279,7 @@ class LucidDreamer:
             if os.path.exists("./gsplat.ply"):
                 os.remove("./gsplat.ply")
 
-    def render_video(self, preset, example_name=None, progress=gr.Progress()):
+    def render_video_preset(self, preset, example_name=None, progress=gr.Progress()):
         if example_name and example_name != "DON'T":
             videopath = os.path.join("examples", f"{example_name}_{preset}.mp4")
             depthpath = os.path.join("examples", f"depth_{example_name}_{preset}.mp4")
@@ -1407,3 +1407,37 @@ class LucidDreamer:
                     (0, int(h_in / 2 - w_in / 2), w_in, int(h_in / 2 + w_in / 2))
                 ).resize((self.cam.W, self.cam.H))
         return image_curr_pil
+    
+    def render_video(self, minicams, name):
+        """
+        Params:
+            minicams: A list of MiniCams defining the camera trajectory.
+        """
+        videopath = os.path.join(self.save_dir, f"rgb_{name}.mp4")
+        depthpath = os.path.join(self.save_dir, f"depth_{name}.mp4")
+
+        framelist = []
+        depthlist = []
+        dmin, dmax = 1e8, -1e8
+
+        for view in minicams:
+            results = render(view, self.gaussians, self.opt, self.background)
+            frame, depth = results["render"], results["depth"]
+            framelist.append(
+                np.round(
+                    frame.permute(1, 2, 0).detach().cpu().numpy().clip(0, 1) * 255.0
+                ).astype(np.uint8)
+            )
+            depth = -(depth * (depth > 0)).detach().cpu().numpy()
+            dmin_local = depth.min().item()
+            dmax_local = depth.max().item()
+            if dmin_local < dmin:
+                dmin = dmin_local
+            if dmax_local > dmax:
+                dmax = dmax_local
+            depthlist.append(depth)
+
+        depthlist = [colorize(depth) for depth in depthlist]
+        imageio.mimwrite(videopath, framelist, fps=60, quality=8)
+        imageio.mimwrite(depthpath, depthlist, fps=60, quality=8)
+        return videopath, depthpath

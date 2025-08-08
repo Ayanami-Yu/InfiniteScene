@@ -51,9 +51,19 @@ def save_collage(imgs, dir, height, width, name):
     photo_collage(imgs, height, width).save(f"{dir}/{name}.png")
 
 
-def save_images(imgs, dir, prompts):
+def save_images(imgs, dir, prompts=None, name=None):
+    """
+    Params:
+        img: Union[List[PIL.Image], PIL.Image]
+        prompts: List[str]
+    """
+    assert not (prompts is None and name is None), "Provide either prompts or name for saving images"
     os.makedirs(dir, exist_ok=True)
-    for i, img in enumerate(imgs):
-        img.save(
-            f'{dir}/{i}_{prompts[i].lower().replace(".", "").replace(" ", "_")}.png'
-        )
+    if type(imgs) is list:
+        for i, img in enumerate(imgs):
+            img.save(
+                f'{dir}/{i}_{prompts[i].lower().replace(".", "").replace(" ", "_")}.png'
+            )
+    else:
+        name = f'{prompts[0].lower().replace(".", "").replace(" ", "_")}.png' if name is None else name
+        img.save(f'{dir}/{name}')
