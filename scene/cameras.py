@@ -31,7 +31,12 @@ class Camera(nn.Module):
         trans=np.array([0.0, 0.0, 0.0]),
         scale=1.0,
         data_device="cuda",
+        z_scale=1.0,
     ):
+        """
+        Params:
+            z_scale: The factor to multiply zfar and znear (which determine the clipping planes). Should be set accordingly if the camera focal is changed.
+        """
         super(Camera, self).__init__()
 
         self.uid = uid
@@ -67,8 +72,8 @@ class Camera(nn.Module):
                 (1, self.image_height, self.image_width), device=self.data_device
             )
 
-        self.zfar = 100.0
-        self.znear = 0.01
+        self.zfar = 100.0 * z_scale
+        self.znear = 0.01 * z_scale
 
         self.trans = trans
         self.scale = scale

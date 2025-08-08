@@ -173,6 +173,7 @@ class GenPowers10Pipeline(nn.Module):
         Params:
             prompts: A list of strings. len(prompts) will be the number of zoom-in levels.
             save_dir: The folder path to save collage images. If not provided, save_collage will not be called.
+            photograph: A PIL image resized to [64, 64] using Image.BILINEAR
         Returns:
             A list of PIL images, each corresponding to one zoom-in level.
         """

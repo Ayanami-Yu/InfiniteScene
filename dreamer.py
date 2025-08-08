@@ -3,6 +3,7 @@ import datetime
 import torch
 import numpy as np
 from PIL import Image
+from torchvision import transforms
 
 from luciddreamer import LucidDreamer
 from arguments import CameraParams
@@ -54,16 +55,42 @@ class Dreamer(LucidDreamer):
                 os.makedirs(self.save_dir)
             outfile = self.save_ply(os.path.join(self.save_dir, "gsplat.ply"))
         else:  # use Powers of Ten
-            self.create_scene(txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p)
+            self.create_scene(
+                rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p
+            )
             os.makedirs(self.save_dir, exist_ok=True)
             outfile = self.save_ply(os.path.join(self.save_dir, "gsplat.ply"))
         return outfile
-    
-    def create_scene(self, rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p):
-        # generate the initial scene
-        dtype, device = self.dtype, self.device
+
+    def create_scene(
+        self, rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p
+    ):
+        # generate camera trajectory
+        num_levels = len(txt_cond)
         H, W = self.cam.H, self.cam.W
-        cam_extri = torch.tensor(get_pcdGenPoses(pcdgenpath=pcdgenpath), dtype=dtype, device=device)
+        cam_extri = get_pcdGenPoses(pcdgenpath=pcdgenpath)
+        c2w = np.linalg.inv(np.concatenate((cam_extri[0], np.array([[0, 0, 0, 1]])), axis=0))
+        focalx = [self.cam.focal[0] * (p ** i) for i in range(num_levels)]
+        cam_intri = [
+            torch.tensor(
+                [
+                    [focalx[i], 0.0, self.cam.W / 2],
+                    [0.0, focalx[i], self.cam.H / 2],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=self.dtype,
+                device=self.device,
+            )
+            for i in range(num_levels)
+        ]
+        cam_render = [
+            get_render_cam(
+                focalx=focalx[i], c2w=c2w, H=H, W=W, z_scale=p ** i
+            )
+            for i in range(num_levels)
+        ]
+
+        # generate the initial scene
         traindata = self.generate_pcd_torch(
             rgb_cond, txt_cond[0], neg_txt_cond, cam_extri, seed, diff_steps
         )
@@ -71,33 +98,40 @@ class Dreamer(LucidDreamer):
         self.training()
         merger = GaussianMerger(self.scene.gaussians)
 
-        num_levels = len(txt_cond)
-        focalx = [self.cam.focal[0] * (p ** (i + 1)) for i in range(num_levels)]
-        cam_render = [get_render_cam(focalx=focalx[i], c2w=cam_extri[0], H=H, W=W) for i in range(num_levels)]
-        cam_train = [get_train_cam(img=img_zoomed, focalx=focalx[i], c2w=cam_extri[0], H=H, W=W, white_background=self.opt.white_background) for i in range(num_levels)]
-
         # zoom in (forward in a straight line)
+        to_pil = transforms.ToPILImage()
         for i in range(num_levels - 1):
-            img_cur = render(cam_render[i], self.gaussians, self.opt, self.background)
+            img_cur = render(cam_render[i], self.gaussians, self.opt, self.background)["render"]  # FIXME all-black image
             img_zoomed = self.zoom_model(
-                    txt_cond[i : i + 2],
-                    neg_txt_cond,
-                    p,
-                    num_inference_steps=diff_steps,
-                    guidance_scale=7,
-                    photograph=img_cur,
-                    viz_step=0,
-                )[1]
+                txt_cond[i : i + 2],
+                neg_txt_cond,
+                p,
+                num_inference_steps=diff_steps,
+                guidance_scale=7,
+                photograph=to_pil(img_cur),
+                viz_step=0,
+            )[1]
+            img_zoomed = self.resize_image(img_zoomed)
             # TODO test results of ZoeDepth
-            points_new, colors_new = self.backproject(image=img_zoomed, H=H, W=W, cam_pose=cam_extri[0])
+            points_new, colors_new = self.backproject(
+                image=img_zoomed, K=cam_intri[i], cam_pose=torch.tensor(cam_extri[0], dtype=self.dtype, device=self.device)
+            )
 
             # merge Gaussians and jointly train
-            merger.merge_gaussians(new_gaussian_attrs=merger.init_from_pcd(points_new, colors_new), opt=self.opt)
-            self.training(cameras=[cam_train[i]])
-
-
-
-
+            cam_train = get_train_cam(
+                img=img_zoomed,
+                focalx=focalx[i + 1],
+                c2w=c2w,
+                H=H,
+                W=W,
+                white_background=self.opt.white_background,
+                z_scale=p ** (i + 1),
+            )
+            merger.merge_gaussians(
+                new_gaussian_attrs=merger.init_from_pcd(points_new.reshape(-1, 3), colors_new),
+                opt=self.opt,
+            )
+            self.training(cameras=[cam_train])
 
     def create_scene_v2(
         self, rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p
@@ -106,7 +140,11 @@ class Dreamer(LucidDreamer):
         dtype, device = self.dtype, self.device
         num_levels = len(txt_cond)
         cam_extri = [
-            torch.tensor(get_pcdGenPoses(pcdgenpath=pcdgenpath, deg_denom=p**i), dtype=dtype, device=device)
+            torch.tensor(
+                get_pcdGenPoses(pcdgenpath=pcdgenpath, deg_denom=p**i),
+                dtype=dtype,
+                device=device,
+            )
             for i in range(num_levels)
         ]
         # note that since self.cam only affects H, W and generate_pcd, so no need to modify it for zooming process
@@ -125,10 +163,13 @@ class Dreamer(LucidDreamer):
             for i in range(num_levels)
         ]
         minicams = [
-            [get_render_cam(
-                focalx=cam_focal[i], c2w=cam_extri[i][j], H=self.cam.H, W=self.cam.W
-            )
-            for j in range(len(cam_extri[i]))] for i in range(num_levels)
+            [
+                get_render_cam(
+                    focalx=cam_focal[i], c2w=cam_extri[i][j], H=self.cam.H, W=self.cam.W
+                )
+                for j in range(len(cam_extri[i]))
+            ]
+            for i in range(num_levels)
         ]
 
         # generate the initial scene
@@ -139,6 +180,7 @@ class Dreamer(LucidDreamer):
         self.training()
 
         # zoom in
+        to_pil = transforms.ToPILImage()
         for i in range(num_levels - 1):
             for j in range(len(cam_extri[i])):
                 img = render(minicams[i][j], self.gaussians, self.opt, self.background)[
@@ -150,7 +192,7 @@ class Dreamer(LucidDreamer):
                     p,
                     num_inference_steps=diff_steps,
                     guidance_scale=7,
-                    photograph=img,
+                    photograph=to_pil(img),
                     viz_step=0,
                 )[1]
                 # TODO enforce multi-view consistency
@@ -237,7 +279,7 @@ class Dreamer(LucidDreamer):
             ]
         return images
 
-    def backproject(self, image, H, W, K, cam_pose):
+    def backproject(self, image, K, cam_pose):
         """
         Params:
             image: PIL image for depth prediction.
@@ -250,6 +292,7 @@ class Dreamer(LucidDreamer):
         dtype, device = self.dtype, self.device
         depth = torch.tensor(self.d(image), device=device)
         image = torch.tensor(np.array(image), dtype=dtype, device=device)
+        H, W = image.shape[0], image.shape[1]  # TODO (H, W) or (W, H)
 
         K_inv = torch.linalg.inv(K)
         x, y = torch.meshgrid(

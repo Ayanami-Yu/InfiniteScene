@@ -1615,6 +1615,19 @@ def generate_tapered_orbit(  # TODO test
     return render_poses
 
 
+def generate_diving():  # TODO
+    # z-axis of camera points backward, so `movement` should be negative to make camera move forward
+    movement = np.linspace(0, -10, 401)
+    render_poses = []
+    for i in range(len(movement)):
+        render_pose = np.zeros((3, 4))
+        render_pose[:3, :3] = np.eye(3)
+        render_pose[:3, 3:4] = np.array([[0], [0], [movement[i]]])
+        render_poses.append(render_pose)
+
+    return render_poses
+
+
 def get_pcdGenPoses(pcdgenpath, argdict={}, deg_denom=1):
     """
     Returns: np.ndarray[N, 3, 4] where N is the number of camera poses.
@@ -1645,7 +1658,13 @@ def getCameraPaths():
     Precompute all camera trajectories for rendering videos
     """
     preset_json = {}
-    for cam_path in ["back_and_forth", "llff", "headbanging", "tapered"]:  # TODO
+    for cam_path in [
+        "back_and_forth",
+        "llff",
+        "headbanging",
+        "tapered",
+        "diving",
+    ]:  # TODO
         if cam_path == "back_and_forth":
             render_poses = generate_seed_back()
         elif cam_path == "llff":
@@ -1656,6 +1675,8 @@ def getCameraPaths():
             )
         elif cam_path == "tapered":
             render_poses = generate_tapered_orbit()
+        elif cam_path == "diving":
+            render_poses = generate_diving()  # TODO
         else:
             raise ("Unknown pass")
 

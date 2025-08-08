@@ -26,6 +26,7 @@ from utils.graphics import (
 WARNED = False
 
 
+# TODO consider adding z_scale
 def load_json(path, H, W):
     cams = []
     with open(path) as json_file:
@@ -59,7 +60,7 @@ def load_json(path, H, W):
     return cams
 
 
-def loadCam(args, id, cam_info, resolution_scale):
+def loadCam(args, id, cam_info, resolution_scale):  # unused
     orig_w, orig_h = cam_info.image.size
 
     if args.resolution in [1, 2, 4, 8]:
@@ -116,6 +117,7 @@ def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     return camera_list
 
 
+# TODO document zfar and znear in JSON file
 def camera_to_JSON(id, camera: Camera):
     Rt = np.zeros((4, 4))
     Rt[:3, :3] = camera.R.transpose()
@@ -139,25 +141,21 @@ def camera_to_JSON(id, camera: Camera):
     return camera_entry
 
 
-def get_render_cam(focalx, c2w, H, W):
+def get_render_cam(focalx, c2w, H, W, z_scale=1.0):
     """
     Params:
-        c2w: np.ndarray Camera to world transformation.
+        c2w: np.ndarray[4, 4] Camera to world transformation.
+        z_scale: The scaling factor to multiply zfar and znear.
     """
-    # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
-    # copy so that the original c2w won't be modified
-    c2w_tmp = c2w.copy()
-    c2w_tmp[:3, 1:3] *= -1
-
     # get the world-to-camera transform and set R, T
-    w2c = np.linalg.inv(c2w_tmp)
+    w2c = np.linalg.inv(c2w)
     R = np.transpose(w2c[:3, :3])  # R is stored transposed due to 'glm' in CUDA code
     T = w2c[:3, 3]
 
     fovx = focal2fov(focalx, W)
     fovy = focal2fov(fov2focal(fovx, W), H)
 
-    znear, zfar = 0.01, 100
+    znear, zfar = 0.01 * z_scale, 100 * z_scale
     world_view_transform = (
         torch.tensor(getWorld2View2(R, T, np.array([0.0, 0.0, 0.0]), 1.0))
         .transpose(0, 1)
@@ -184,20 +182,16 @@ def get_render_cam(focalx, c2w, H, W):
     )
 
 
-def get_train_cam(img, focalx, c2w, H, W, white_background: bool, idx=0):
+def get_train_cam(img, focalx, c2w, H, W, white_background: bool, z_scale=1.0, idx=0):
     """
     Params:
+        c2w: np.ndarray[4, 4] Camera to world transformation.
         img: The GT image corresponding to that view. That is, the image projected/interpolated from colored point cloud in `generate_pcd`, or the zoomed-in image.
+        z_scale: The scaling factor to multiply zfar and znear.
     """
-    # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
-    c2w_tmp = c2w.copy()
-    c2w_tmp[:3, 1:3] *= -1
-
     # get the world-to-camera transform and set R, T
-    w2c = np.linalg.inv(c2w_tmp)
-    R = np.transpose(
-        w2c[:3, :3]
-    )  # R is stored transposed due to 'glm' in CUDA code
+    w2c = np.linalg.inv(c2w)
+    R = np.transpose(w2c[:3, :3])  # R is stored transposed due to 'glm' in CUDA code
     T = w2c[:3, 3]
 
     bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
@@ -209,4 +203,16 @@ def get_train_cam(img, focalx, c2w, H, W, white_background: bool, idx=0):
     img = img[:, :, :3] * img[:, :, 3:4] + bg * (1 - img[:, :, 3:4])
     img = torch.Tensor(img).permute(2, 0, 1)
 
-    return Camera(colmap_id=idx, R=R, T=T, FoVx=fovx, FoVy=fovy, image=img, gt_alpha_mask=None, image_name='', uid=idx, data_device='cuda')
+    return Camera(
+        colmap_id=idx,
+        R=R,
+        T=T,
+        FoVx=fovx,
+        FoVy=fovy,
+        image=img,
+        gt_alpha_mask=None,
+        image_name="",
+        uid=idx,
+        data_device="cuda",
+        z_scale=z_scale,
+    )

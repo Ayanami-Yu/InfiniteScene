@@ -364,7 +364,9 @@ class LucidDreamer:
                 self.gaussians.oneupSHdegree()
 
             # Pick a random Camera
-            viewpoint_stack = self.scene.getTrainCameras().copy() if not cameras else cameras.copy()
+            viewpoint_stack = (
+                self.scene.getTrainCameras().copy() if not cameras else cameras.copy()
+            )
             viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
 
             # import pdb; pdb.set_trace()
@@ -388,7 +390,7 @@ class LucidDreamer:
             loss.backward()
 
             with torch.no_grad():
-                # Densification
+                # Densification  # TODO consider removing densification
                 if iteration < self.opt.densify_until_iter:
                     # Keep track of max radii in image-space for pruning
                     self.gaussians.max_radii2D[visibility_filter] = torch.max(
@@ -438,52 +440,7 @@ class LucidDreamer:
         # processing inputs
         generator = torch.Generator(device="cuda").manual_seed(seed)
 
-        w_in, h_in = rgb_cond.size
-        # if height and width are similar, do center crop
-        if w_in / h_in > 1.1 or h_in / w_in > 1.1:
-            in_res = max(w_in, h_in)
-            image_in, mask_in = np.zeros(
-                (in_res, in_res, 3), dtype=np.uint8
-            ), 255 * np.ones((in_res, in_res, 3), dtype=np.uint8)
-            image_in[
-                int(in_res / 2 - h_in / 2) : int(in_res / 2 + h_in / 2),
-                int(in_res / 2 - w_in / 2) : int(in_res / 2 + w_in / 2),
-            ] = np.array(rgb_cond)
-            mask_in[
-                int(in_res / 2 - h_in / 2) : int(in_res / 2 + h_in / 2),
-                int(in_res / 2 - w_in / 2) : int(in_res / 2 + w_in / 2),
-            ] = 0
-
-            image2 = (
-                np.array(
-                    Image.fromarray(image_in).resize((self.cam.W, self.cam.H))
-                ).astype(float)
-                / 255.0
-            )
-            mask2 = (
-                np.array(
-                    Image.fromarray(mask_in).resize((self.cam.W, self.cam.H))
-                ).astype(float)
-                / 255.0
-            )
-            image_curr = self.rgb(
-                prompt=prompt,
-                image=image2,
-                negative_prompt=negative_prompt,
-                generator=generator,
-                mask_image=mask2,
-            )
-
-        else:  # if there is a large gap between height and width, do inpainting
-            if w_in > h_in:
-                image_curr = rgb_cond.crop(
-                    (int(w_in / 2 - h_in / 2), 0, int(w_in / 2 + h_in / 2), h_in)
-                ).resize((self.cam.W, self.cam.H))
-            else:  # w <= h
-                image_curr = rgb_cond.crop(
-                    (0, int(h_in / 2 - w_in / 2), w_in, int(h_in / 2 + w_in / 2))
-                ).resize((self.cam.W, self.cam.H))
-
+        image_curr = self.resize_image(rgb_cond, prompt, negative_prompt, generator)
         render_poses = get_pcdGenPoses(pcdgenpath, deg_denom=angle_scale)
         depth_curr = self.d(image_curr)
         center_depth = np.mean(
@@ -927,69 +884,25 @@ class LucidDreamer:
         diff_steps,
         progress=gr.Progress(),
         deg_scale=1,
+        fovx=None,
+        z_scale=1.0,
     ):
         """
         Params:
-            pcdgenpath: Union[str, Tensor]
-                Either the name of the camera trajectory or a torch tensor of shape [N, 3, 4] that corresponds to a series of camera poses.
+            pcdgenpath: Union[str, np.ndarray]
+                Either the name of the camera trajectory or a numpy array of shape [N, 3, 4] that corresponds to a series of camera poses.
         """
         # processing inputs
         dtype, device = self.dtype, self.device
         generator = torch.Generator(device=device).manual_seed(seed)
+        fovx = self.cam.fov[0] if not fovx else fovx
 
-        w_in, h_in = rgb_cond.size
-        # if height and width are similar, do center crop
-        if w_in / h_in > 1.1 or h_in / w_in > 1.1:
-            in_res = max(w_in, h_in)
-            image_in, mask_in = np.zeros(
-                (in_res, in_res, 3), dtype=np.uint8
-            ), 255 * np.ones((in_res, in_res, 3), dtype=np.uint8)
-            image_in[
-                int(in_res / 2 - h_in / 2) : int(in_res / 2 + h_in / 2),
-                int(in_res / 2 - w_in / 2) : int(in_res / 2 + w_in / 2),
-            ] = np.array(rgb_cond)
-            mask_in[
-                int(in_res / 2 - h_in / 2) : int(in_res / 2 + h_in / 2),
-                int(in_res / 2 - w_in / 2) : int(in_res / 2 + w_in / 2),
-            ] = 0
-
-            image2_np = (
-                np.array(
-                    Image.fromarray(image_in).resize((self.cam.W, self.cam.H))
-                ).astype(float)
-                / 255.0
-            )
-            mask2_np = (
-                np.array(
-                    Image.fromarray(mask_in).resize((self.cam.W, self.cam.H))
-                ).astype(float)
-                / 255.0
-            )
-            image_curr_pil = self.rgb(
-                prompt=prompt,
-                image=image2_np,
-                negative_prompt=negative_prompt,
-                generator=generator,
-                mask_image=mask2_np,
-            )
-
-        else:  # if there is a large gap between height and width, do inpainting
-            if w_in > h_in:
-                image_curr_pil = rgb_cond.crop(
-                    (int(w_in / 2 - h_in / 2), 0, int(w_in / 2 + h_in / 2), h_in)
-                ).resize((self.cam.W, self.cam.H))
-            else:  # w <= h
-                image_curr_pil = rgb_cond.crop(
-                    (0, int(h_in / 2 - w_in / 2), w_in, int(h_in / 2 + w_in / 2))
-                ).resize((self.cam.W, self.cam.H))
-
+        image_curr_pil = self.resize_image(rgb_cond, prompt, negative_prompt, generator)
         render_poses = torch.tensor(
-            (
-                get_pcdGenPoses(pcdgenpath, deg_denom=deg_scale)
-            ),
-            dtype=dtype,
-            device=device,
-        ) if type(pcdgenpath) is str else pcdgenpath
+                get_pcdGenPoses(pcdgenpath, deg_denom=deg_scale) if type(pcdgenpath) is str else pcdgenpath,
+                dtype=dtype,
+                device=device,
+            )
         depth_curr = self.d(image_curr_pil)
         center_depth_np = np.mean(
             depth_curr[
@@ -1318,6 +1231,7 @@ class LucidDreamer:
             "pcd_points": pts_coord_world.detach().cpu().numpy(),  # for 3DGS init
             "pcd_colors": pts_colors.detach().cpu().numpy(),
             "frames": [],  # contains extrinsics
+            "z_scale": [], # for scaling znear and zfar
         }
 
         internal_render_poses = torch.tensor(
@@ -1428,7 +1342,8 @@ class LucidDreamer:
                 )
                 imagej = maskj[..., None] * imagej + (1 - maskj[..., None]) * 0
 
-                traindata["camera_angle_x"].append(self.cam.fov[0])
+                traindata["camera_angle_x"].append(fovx)
+                traindata["z_scale"].append(z_scale)
                 traindata["frames"].append(
                     {
                         "image": Image.fromarray(
@@ -1442,3 +1357,53 @@ class LucidDreamer:
 
         progress(1, desc="[3/4] Baking Gaussians...")
         return traindata
+
+    def resize_image(self, rgb_cond, prompt=None, negative_prompt="", generator=None):
+        w_in, h_in = rgb_cond.size
+        # if height and width are similar, do center crop
+        if w_in / h_in > 1.1 or h_in / w_in > 1.1:
+            assert prompt is not None, "Irregular-sized image requires prompt to do inpainting"
+
+            in_res = max(w_in, h_in)
+            image_in, mask_in = np.zeros(
+                (in_res, in_res, 3), dtype=np.uint8
+            ), 255 * np.ones((in_res, in_res, 3), dtype=np.uint8)
+            image_in[
+                int(in_res / 2 - h_in / 2) : int(in_res / 2 + h_in / 2),
+                int(in_res / 2 - w_in / 2) : int(in_res / 2 + w_in / 2),
+            ] = np.array(rgb_cond)
+            mask_in[
+                int(in_res / 2 - h_in / 2) : int(in_res / 2 + h_in / 2),
+                int(in_res / 2 - w_in / 2) : int(in_res / 2 + w_in / 2),
+            ] = 0
+
+            image2_np = (
+                np.array(
+                    Image.fromarray(image_in).resize((self.cam.W, self.cam.H))
+                ).astype(float)
+                / 255.0
+            )
+            mask2_np = (
+                np.array(
+                    Image.fromarray(mask_in).resize((self.cam.W, self.cam.H))
+                ).astype(float)
+                / 255.0
+            )
+            image_curr_pil = self.rgb(
+                prompt=prompt,
+                image=image2_np,
+                negative_prompt=negative_prompt,
+                generator=generator,
+                mask_image=mask2_np,
+            )
+
+        else:  # if there is a large gap between height and width, do inpainting
+            if w_in > h_in:
+                image_curr_pil = rgb_cond.crop(
+                    (int(w_in / 2 - h_in / 2), 0, int(w_in / 2 + h_in / 2), h_in)
+                ).resize((self.cam.W, self.cam.H))
+            else:  # w <= h
+                image_curr_pil = rgb_cond.crop(
+                    (0, int(h_in / 2 - w_in / 2), w_in, int(h_in / 2 + w_in / 2))
+                ).resize((self.cam.W, self.cam.H))
+        return image_curr_pil
