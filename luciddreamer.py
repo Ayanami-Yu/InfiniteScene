@@ -31,7 +31,8 @@ from diffusers import (
     ControlNetModel,
     StableDiffusionControlNetInpaintPipeline,
 )
-from utils.scipy import interp_grid, maximum_filter, minimum_filter
+from scipy.interpolate import griddata as interp_grid
+from scipy.ndimage import minimum_filter, maximum_filter
 
 from arguments import GSParams, CameraParams
 from gaussian_renderer import render
@@ -60,7 +61,14 @@ pad_mask = lambda x, padamount=1: t2np(
 
 
 class LucidDreamer:
-    def __init__(self, for_gradio=True, save_dir=None, torch_hub_local=True, dtype=torch.float32, device="cuda"):
+    def __init__(
+        self,
+        for_gradio=True,
+        save_dir=None,
+        torch_hub_local=True,
+        dtype=torch.float32,
+        device="cuda",
+    ):
         self.dtype = dtype
         self.device = device
 
@@ -218,7 +226,9 @@ class LucidDreamer:
             model_name,
             example_name,
         )
-        gallery, depth = self.render_video_preset(render_camerapath, example_name=example_name)
+        gallery, depth = self.render_video_preset(
+            render_camerapath, example_name=example_name
+        )
         return (gaussians, gallery, depth)
 
     def create(
@@ -369,7 +379,9 @@ class LucidDreamer:
 
             # Pick a random Camera
             viewpoint_stack = (
-                self.scene.getTrainCameras().copy() if not cameras else cameras.copy()
+                self.scene.getTrainCameras().copy()
+                if cameras is None
+                else cameras.copy()
             )
             viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
 
@@ -878,495 +890,13 @@ class LucidDreamer:
         progress(1, desc="[3/4] Baking Gaussians...")
         return traindata
 
-    def generate_pcd_torch(
-        self,
-        rgb_cond,
-        prompt,
-        negative_prompt,
-        pcdgenpath,
-        seed,
-        diff_steps,
-        progress=gr.Progress(),
-        deg_scale=1,
-        fovx=None,
-        z_scale=1.0,
-    ):
-        """
-        Params:
-            pcdgenpath: Union[str, np.ndarray]
-                Either the name of the camera trajectory or a numpy array of shape [N, 3, 4] that corresponds to a series of camera poses.
-        """
-        # processing inputs
-        dtype, device = self.dtype, self.device
-        generator = torch.Generator(device=device).manual_seed(seed)
-        fovx = self.cam.fov[0] if not fovx else fovx
-
-        image_curr_pil = self.resize_image(rgb_cond, prompt, negative_prompt, generator)
-        render_poses = torch.tensor(
-                get_pcdGenPoses(pcdgenpath, deg_denom=deg_scale) if type(pcdgenpath) is str else pcdgenpath,
-                dtype=dtype,
-                device=device,
-            )
-        depth_curr = self.d(image_curr_pil)
-        center_depth_np = np.mean(
-            depth_curr[
-                self.cam.H // 2 - 10 : self.cam.H // 2 + 10,
-                self.cam.W // 2 - 10 : self.cam.W // 2 + 10,
-            ]
-        )
-        depth_curr = torch.tensor(depth_curr, device=device)
-        image_curr = torch.tensor(np.array(image_curr_pil), dtype=dtype, device=device)
-
-        H, W, K = self.cam.H, self.cam.W, torch.tensor(self.cam.K, device=device)
-        K_inv = torch.linalg.inv(K)
-        x, y = torch.meshgrid(
-            torch.arange(W, dtype=dtype, device=device),
-            torch.arange(H, dtype=dtype, device=device),
-            indexing="xy",
-        )  # pixels
-        edgeN = 2
-        edgemask = torch.ones((H - 2 * edgeN, W - 2 * edgeN), device=device)
-        edgemask = F.pad(
-            edgemask, (edgeN, edgeN, edgeN, edgeN), mode="constant", value=0
-        )
-
-        # initialize
-        R0, T0 = render_poses[0, :3, :3], render_poses[0, :3, 3:4]
-        R0_inv = torch.linalg.inv(R0)
-        pts_coord_cam = K_inv @ torch.stack(
-            (x * depth_curr, y * depth_curr, 1 * depth_curr), dim=0
-        ).reshape(3, -1)
-
-        new_pts_coord_world2 = R0_inv @ pts_coord_cam - R0_inv @ T0
-        new_pts_colors2 = image_curr.reshape(-1, 3) / 255.0
-
-        # pts_colors will be used to initialize the colors of corresponding 3D points. It remains the same during projecting points to/from 3D, because the correspondence between a color and a point remains binded.
-        pts_coord_world, pts_colors = (
-            new_pts_coord_world2.clone(),
-            new_pts_colors2.clone(),
-        )  # initial point cloud P_0
-
-        if self.for_gradio:
-            progress(0, desc="[1/4] Dreaming...")
-            iterable_dream = progress.tqdm(
-                range(1, len(render_poses)), desc="[1/4] Dreaming"
-            )
-        else:
-            iterable_dream = range(1, len(render_poses))
-
-        for i in iterable_dream:
-            R, T = render_poses[i, :3, :3], render_poses[i, :3, 3:4]  # tensors
-            R_inv = torch.linalg.inv(R)
-
-            # transform world to pixel
-            # same as c2w x world_coord (in homogeneous space)
-            pts_coord_cam2 = R @ pts_coord_world + T
-            pixel_coord_cam2 = (
-                K @ pts_coord_cam2
-            )  # [3, N] the previous 3D points in image coord
-
-            z = pixel_coord_cam2[2]
-            x_homo = pixel_coord_cam2[0] / z
-            y_homo = pixel_coord_cam2[1] / z
-            valid_idx = torch.nonzero(
-                (z > 0)
-                & (x_homo >= 0)
-                & (x_homo <= W - 1)
-                & (y_homo >= 0)
-                & (y_homo <= H - 1),
-                as_tuple=False,
-            ).squeeze(1)
-
-            # divide by z coord to get homogeneous coord
-            pixel_coord_cam2 = (
-                pixel_coord_cam2[:2, valid_idx] / pixel_coord_cam2[-1:, valid_idx]
-            )
-            round_coord_cam2 = torch.round(pixel_coord_cam2).to(torch.int32)
-
-            x, y = torch.meshgrid(
-                torch.arange(W, dtype=torch.float32, device=device),
-                torch.arange(H, dtype=torch.float32, device=device),
-                indexing="xy",
-            )
-            grid = torch.stack((x, y), dim=-1).reshape(-1, 2)  # [N, 2] row-major
-            image2 = interp_grid(
-                pixel_coord_cam2.transpose(1, 0),
-                pts_colors[valid_idx],
-                grid,
-                method="linear",
-                fill_value=0,
-            ).reshape(H, W, 3)
-            # note that F.pad starts from the last dimension whereas np.pad starts from the first
-            image2_CHW = image2.permute(2, 0, 1)
-            image2 = edgemask[..., None] * image2 + (1 - edgemask[..., None]) * F.pad(
-                image2_CHW[:, 1:-1, 1:-1], (1, 1, 1, 1), mode="replicate"
-            ).permute(1, 2, 0)
-
-            round_mask2 = torch.zeros((H, W), dtype=torch.float32, device=device)
-            round_mask2[round_coord_cam2[1], round_coord_cam2[0]] = 1
-
-            round_mask2 = maximum_filter(round_mask2, size=(9, 9), axes=(0, 1))
-            image2 = round_mask2[..., None] * image2 + (1 - round_mask2[..., None]) * (
-                -1
-            )
-
-            mask2 = minimum_filter(  # M_i
-                (image2.sum(-1) != -3).to(dtype), size=(11, 11), axes=(0, 1)
-            )
-            image2 = mask2[..., None] * image2 + (1 - mask2[..., None]) * 0  # \hat{I}_i
-
-            mask_hf = torch.abs(
-                mask2[: H - 1, : W - 1] - mask2[1:, : W - 1]
-            ) + torch.abs(mask2[: H - 1, : W - 1] - mask2[: H - 1, 1:])
-            mask_hf = F.pad(
-                mask_hf.unsqueeze(0), (0, 1, 0, 1), mode="replicate"
-            ).squeeze(0)
-            mask_hf = torch.where(mask_hf < 0.3, 0, 1)
-            # use valid_idx[border_valid_idx] for world1
-            border_valid_idx = torch.where(
-                mask_hf[round_coord_cam2[1], round_coord_cam2[0]] == 1
-            )[0]
-
-            image_curr_pil = self.rgb(  # inpainting  # I_i
-                prompt=prompt,
-                image=image2.detach().cpu().numpy(),
-                negative_prompt=negative_prompt,
-                generator=generator,
-                num_inference_steps=diff_steps,
-                mask_image=mask2.detach().cpu().numpy(),
-            )
-            depth_curr = torch.tensor(
-                self.d(image_curr_pil), device=device
-            )  # \hat{D}_i
-            image_curr = torch.tensor(
-                np.array(image_curr_pil), dtype=dtype, device=device
-            )
-
-            # depth optimize
-            t_z2 = torch.tensor(depth_curr, device=device)
-            sc = torch.ones(
-                1, dtype=torch.float32, device=device, requires_grad=True
-            )  # d_i
-            optimizer = torch.optim.Adam(params=[sc], lr=0.001)
-
-            for idx in range(100):  # d_i optimization loop
-                trans3d = torch.tensor(
-                    [[sc, 0, 0, 0], [0, sc, 0, 0], [0, 0, sc, 0], [0, 0, 0, 1]],
-                    device=device,
-                ).requires_grad_(True)
-                coord_cam2 = K_inv @ torch.stack(
-                    (x * t_z2, y * t_z2, 1 * t_z2),
-                    dim=0,
-                )[:, round_coord_cam2[1], round_coord_cam2[0]].reshape(3, -1)
-
-                coord_world2 = R_inv @ coord_cam2 - R_inv @ T
-                coord_world2_warp = torch.cat(
-                    (coord_world2, torch.ones((1, valid_idx.shape[0]), device=device)),
-                    dim=0,
-                )
-                coord_world2_trans = trans3d @ coord_world2_warp
-                coord_world2_trans = (
-                    coord_world2_trans[:3] / coord_world2_trans[-1]
-                )  # \tilde{P}_i
-                loss = torch.mean(
-                    (
-                        torch.tensor(pts_coord_world[:, valid_idx]).to(dtype)
-                        - coord_world2_trans  # P_{i - 1} - \tilde{P}_i
-                    )
-                    ** 2
-                )  # align with the old 3d points backprojected from the previous camera
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-            with torch.no_grad():
-                coord_cam2 = K_inv @ torch.stack(
-                    (x * t_z2, y * t_z2, 1 * t_z2),
-                    dim=0,
-                )[
-                    :,
-                    round_coord_cam2[1, border_valid_idx],
-                    round_coord_cam2[0, border_valid_idx],
-                ].reshape(
-                    3, -1
-                )
-                coord_world2 = R_inv @ coord_cam2 - R_inv @ T
-                coord_world2_warp = torch.cat(
-                    (
-                        coord_world2,
-                        torch.ones((1, border_valid_idx.shape[0]), device=device),
-                    ),
-                    dim=0,
-                )
-                coord_world2_trans = trans3d @ coord_world2_warp
-                coord_world2_trans = (
-                    coord_world2_trans[:3] / coord_world2_trans[-1]
-                )  # rectified \tilde{P}_i (no new points added)
-
-            # trans3d = trans3d.detach().numpy()
-
-            # backproject new 3D points from inpainted region
-            pts_coord_cam2 = K_inv @ torch.stack(
-                (x * depth_curr, y * depth_curr, 1 * depth_curr), dim=0
-            ).reshape(3, -1)
-            pts_coord_cam2 = pts_coord_cam2[
-                :, torch.where(1 - mask2.reshape(-1))[0]
-            ]  # select M_i == 0
-
-            camera_origin_coord_world2 = (
-                -R_inv @ T
-            )  # [3, 1] camera origin in world coord
-            new_pts_coord_world2 = R_inv @ pts_coord_cam2 - R_inv @ T
-            new_pts_coord_world2_warp = torch.cat(
-                (
-                    new_pts_coord_world2,
-                    torch.ones((1, new_pts_coord_world2.shape[1]), device=device),
-                ),
-                dim=0,
-            )
-            new_pts_coord_world2 = trans3d @ new_pts_coord_world2_warp
-            new_pts_coord_world2 = (
-                new_pts_coord_world2[:3] / new_pts_coord_world2[-1]
-            )  # \hat{P}_i
-            new_pts_colors2 = (image_curr.reshape(-1, 3) / 255.0)[
-                torch.where(1 - mask2.reshape(-1))[0]
-            ]
-
-            vector_camorigin_to_campixels = (
-                coord_world2_trans - camera_origin_coord_world2
-            )  # the ray lines from cam center to corresponding points
-            vector_camorigin_to_pcdpixels = (
-                pts_coord_world[:, valid_idx[border_valid_idx]]  # P_{i - 1}
-                - camera_origin_coord_world2
-            )
-
-            compensate_depth_coeff = torch.sum(
-                vector_camorigin_to_pcdpixels * vector_camorigin_to_campixels, dim=0
-            ) / torch.sum(
-                vector_camorigin_to_campixels * vector_camorigin_to_campixels, dim=0
-            )  # N_correspond
-            compensate_pts_coord_world2_correspond = (
-                camera_origin_coord_world2
-                + vector_camorigin_to_campixels * compensate_depth_coeff.reshape(1, -1)
-            )
-
-            compensate_coord_cam2_correspond = (
-                R @ compensate_pts_coord_world2_correspond + T
-            )
-            homography_coord_cam2_correspond = R @ coord_world2_trans + T
-
-            compensate_depth_correspond = (
-                compensate_coord_cam2_correspond[-1]
-                - homography_coord_cam2_correspond[-1]
-            )  # N_correspond
-            compensate_depth_zero = torch.zeros(4, device=device)
-            compensate_depth = torch.cat(
-                (compensate_depth_correspond, compensate_depth_zero), dim=0
-            )  # N_correspond + 4
-
-            pixel_cam2_correspond = pixel_coord_cam2[
-                :, border_valid_idx
-            ]  # [2, N_correspond] (xy)  # points corresponding to the previous image (in cam coord)
-            pixel_cam2_zero = torch.tensor(
-                [[0, 0, W - 1, W - 1], [0, H - 1, 0, H - 1]], device=device
-            )
-            pixel_cam2 = torch.cat(
-                (pixel_cam2_correspond, pixel_cam2_zero), dim=1
-            ).transpose(
-                1, 0
-            )  # N + H, 2
-
-            # calculate for each pixel how much the depth value should change using linear interpolation
-            masked_pixels_xy = torch.stack(torch.where(1 - mask2), dim=1)[:, [1, 0]]
-            new_depth_linear, new_depth_nearest = interp_grid(
-                pixel_cam2, compensate_depth, masked_pixels_xy, method="linear"
-            ), interp_grid(
-                pixel_cam2, compensate_depth, masked_pixels_xy, method="nearest"
-            )
-            new_depth = torch.where(
-                torch.isnan(new_depth_linear), new_depth_nearest, new_depth_linear
-            )
-
-            pts_coord_cam2 = K_inv @ torch.stack(
-                (x * depth_curr, y * depth_curr, 1 * depth_curr), dim=0
-            ).reshape(3, -1)
-            pts_coord_cam2 = pts_coord_cam2[
-                :, torch.where(1 - mask2.reshape(-1))[0]
-            ]  # corresponds to the newly added points
-            x_nonmask, y_nonmask = (
-                x.reshape(-1)[torch.where(1 - mask2.reshape(-1))[0]],
-                y.reshape(-1)[torch.where(1 - mask2.reshape(-1))[0]],
-            )  # the points without GT counterparts (M_i == 0)
-            compensate_pts_coord_cam2 = K_inv @ torch.stack(
-                (x_nonmask * new_depth, y_nonmask * new_depth, 1 * new_depth),
-                dim=0,
-            )
-            new_warp_pts_coord_cam2 = pts_coord_cam2 + compensate_pts_coord_cam2
-
-            new_pts_coord_world2 = R_inv @ new_warp_pts_coord_cam2 - R_inv @ T
-            new_pts_coord_world2_warp = torch.cat(
-                (
-                    new_pts_coord_world2,
-                    torch.ones((1, new_pts_coord_world2.shape[1]), device=device),
-                ),
-                dim=0,
-            )
-            new_pts_coord_world2 = trans3d @ new_pts_coord_world2_warp
-            new_pts_coord_world2 = (
-                new_pts_coord_world2[:3] / new_pts_coord_world2[-1]
-            )  # W(\hat{P}_i)
-            new_pts_colors2 = (image_curr.reshape(-1, 3) / 255.0)[
-                torch.where(1 - mask2.reshape(-1))[0]
-            ]
-
-            pts_coord_world = torch.cat(
-                (pts_coord_world, new_pts_coord_world2), dim=-1
-            )  # P_i = P_{i - 1} \cup W(\hat{P}_i)
-            pts_colors = torch.cat((pts_colors, new_pts_colors2), dim=0)
-
-        yz_reverse = torch.tensor(
-            [[1, 0, 0], [0, -1, 0], [0, 0, -1]], dtype=torch.float32, device=device
-        )
-        traindata = {
-            "camera_angle_x": [],  # for intrinsics
-            "W": W,
-            "H": H,
-            "pcd_points": pts_coord_world.detach().cpu().numpy(),  # for 3DGS init
-            "pcd_colors": pts_colors.detach().cpu().numpy(),
-            "frames": [],  # contains extrinsics
-            "z_scale": [], # for scaling znear and zfar
-        }
-
-        internal_render_poses = torch.tensor(
-            get_pcdGenPoses(
-                "hemisphere", {"center_depth": center_depth_np}, deg_denom=deg_scale
-            ),
-            dtype=dtype,
-            device=device,
-        )
-
-        if self.for_gradio:
-            progress(0, desc="[2/4] Aligning...")
-            iterable_align = progress.tqdm(
-                range(len(render_poses)), desc="[2/4] Aligning"
-            )
-        else:
-            iterable_align = range(len(render_poses))
-
-        # generate additional image-mask pairs by reprojecting from P_N by a new camera sequence
-        for i in iterable_align:
-            for j in range(len(internal_render_poses)):
-                idx = i * len(internal_render_poses) + j
-                print(f"{idx + 1} / {len(render_poses) * len(internal_render_poses)}")
-
-                # transform world to pixel
-                Rw2i = render_poses[i, :3, :3]
-                Tw2i = render_poses[i, :3, 3:4]
-                Ri2j = internal_render_poses[j, :3, :3]
-                Ti2j = internal_render_poses[j, :3, 3:4]
-
-                Rw2j = Ri2j @ Rw2i
-                Tw2j = Ri2j @ Tw2i + Ti2j
-
-                # Transfrom cam2 to world + change sign of yz axis
-                Rj2w = (yz_reverse @ Rw2j).T
-                Tj2w = -Rj2w @ (yz_reverse @ Tw2j)
-                Pc2w = torch.cat((Rj2w, Tj2w), dim=1)
-                Pc2w = torch.cat(
-                    (
-                        Pc2w,
-                        torch.tensor([[0, 0, 0, 1]], dtype=Pc2w.dtype, device=device),
-                    ),
-                    dim=0,
-                )
-
-                # project P_N onto camj
-                pts_coord_camj = Rw2j @ pts_coord_world + Tw2j
-                pixel_coord_camj = K @ pts_coord_camj
-
-                z_j = pixel_coord_camj[2]
-                x_homo_j = pixel_coord_camj[0] / z_j
-                y_homo_j = pixel_coord_camj[1] / z_j
-                valid_idxj = torch.where(
-                    (z_j > 0)
-                    & (x_homo_j >= 0)
-                    & (x_homo_j <= W - 1)
-                    & (y_homo_j >= 0)
-                    & (y_homo_j <= H - 1)
-                )[0]
-                if len(valid_idxj) == 0:
-                    continue
-                pts_depthsj = pixel_coord_camj[-1:, valid_idxj]
-                pixel_coord_camj = (
-                    pixel_coord_camj[:2, valid_idxj] / pixel_coord_camj[-1:, valid_idxj]
-                )
-                round_coord_camj = torch.round(pixel_coord_camj).to(torch.int32)
-
-                x, y = torch.meshgrid(
-                    torch.arange(W, dtype=torch.float32, device=device),
-                    torch.arange(H, dtype=torch.float32, device=device),
-                    indexing="xy",
-                )  # pixels
-                grid = torch.stack((x, y), dim=-1).reshape(-1, 2)
-                imagej = interp_grid(
-                    pixel_coord_camj.transpose(1, 0),
-                    pts_colors[valid_idxj],
-                    grid,
-                    method="linear",
-                    fill_value=0,
-                ).reshape(H, W, 3)
-                imagej_CHW = imagej.permute(2, 0, 1)
-                imagej = edgemask[..., None] * imagej + (
-                    1 - edgemask[..., None]
-                ) * F.pad(
-                    imagej_CHW[:, 1:-1, 1:-1], (1, 1, 1, 1), mode="replicate"
-                ).permute(
-                    1, 2, 0
-                )
-
-                depthj = interp_grid(
-                    pixel_coord_camj.transpose(1, 0),
-                    pts_depthsj.T,
-                    grid,
-                    method="linear",
-                    fill_value=0,
-                ).reshape(H, W)
-                depthj = edgemask * depthj + (1 - edgemask) * F.pad(
-                    depthj[None, 1:-1, 1:-1], (1, 1, 1, 1), mode="replicate"
-                ).squeeze(0)
-
-                maskj = torch.zeros((H, W), dtype=torch.float32, device=device)
-                maskj[round_coord_camj[1], round_coord_camj[0]] = 1
-                maskj = maximum_filter(maskj, size=(9, 9), axes=(0, 1))
-                imagej = maskj[..., None] * imagej + (1 - maskj[..., None]) * (-1)
-
-                maskj = minimum_filter(
-                    (imagej.sum(-1) != -3).to(dtype), size=(11, 11), axes=(0, 1)
-                )
-                imagej = maskj[..., None] * imagej + (1 - maskj[..., None]) * 0
-
-                traindata["camera_angle_x"].append(fovx)
-                traindata["z_scale"].append(z_scale)
-                traindata["frames"].append(
-                    {
-                        "image": Image.fromarray(
-                            np.round(imagej.detach().cpu().numpy() * 255.0).astype(
-                                np.uint8
-                            )
-                        ),
-                        "transform_matrix": Pc2w.tolist(),
-                    }
-                )
-
-        progress(1, desc="[3/4] Baking Gaussians...")
-        return traindata
-
     def resize_image(self, rgb_cond, prompt=None, negative_prompt="", generator=None):
         w_in, h_in = rgb_cond.size
         # if height and width are similar, do center crop
         if w_in / h_in > 1.1 or h_in / w_in > 1.1:
-            assert prompt is not None, "Irregular-sized image requires prompt to do inpainting"
+            assert (
+                prompt is not None
+            ), "Irregular-sized image requires prompt to do inpainting"
 
             in_res = max(w_in, h_in)
             image_in, mask_in = np.zeros(
@@ -1411,7 +941,7 @@ class LucidDreamer:
                     (0, int(h_in / 2 - w_in / 2), w_in, int(h_in / 2 + w_in / 2))
                 ).resize((self.cam.W, self.cam.H))
         return image_curr_pil
-    
+
     def render_video(self, minicams, name):
         """
         Params:

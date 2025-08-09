@@ -57,7 +57,9 @@ def save_images(imgs, dir, prompts=None, name=None):
         img: Union[List[PIL.Image], PIL.Image]
         prompts: List[str]
     """
-    assert not (prompts is None and name is None), "Provide either prompts or name for saving images"
+    assert not (
+        prompts is None and name is None
+    ), "Provide either prompts or name for saving images"
     os.makedirs(dir, exist_ok=True)
     if type(imgs) is list:
         for i, img in enumerate(imgs):
@@ -65,5 +67,9 @@ def save_images(imgs, dir, prompts=None, name=None):
                 f'{dir}/{i}_{prompts[i].lower().replace(".", "").replace(" ", "_")}.png'
             )
     else:
-        name = f'{prompts[0].lower().replace(".", "").replace(" ", "_")}.png' if name is None else name
-        imgs.save(f'{dir}/{name}')
+        name = (
+            f'{prompts[0].lower().replace(".", "").replace(" ", "_")}.png'
+            if name is None
+            else name
+        )
+        imgs.save(f"{dir}/{name}")

@@ -1391,6 +1391,48 @@ def generate_seed_back():
     return render_poses
 
 
+def generate_llff_scaling(deg_start, deg_end, nviews, round=4, d=0):
+    assert round % 4 == 0
+    thlist = np.linspace(deg_start, deg_end, nviews) * np.sin(
+        np.linspace(0, 2 * np.pi * round, nviews)
+    )
+    philist = np.linspace(deg_start, deg_end, nviews) * np.cos(
+        np.linspace(0, 2 * np.pi * round, nviews)
+    )
+    zlist = d / 15 * np.sin(np.linspace(0, 2 * np.pi * round // 4, nviews))
+
+    render_poses = np.zeros((len(thlist), 3, 4))
+    for i in range(len(thlist)):
+        th = thlist[i]
+        phi = philist[i]
+        z = zlist[i]
+
+        render_poses[i, :3, :3] = np.matmul(
+            np.array(
+                [
+                    [np.cos(th / 180 * np.pi), 0, -np.sin(th / 180 * np.pi)],
+                    [0, 1, 0],
+                    [np.sin(th / 180 * np.pi), 0, np.cos(th / 180 * np.pi)],
+                ]
+            ),
+            np.array(
+                [
+                    [1, 0, 0],
+                    [0, np.cos(phi / 180 * np.pi), -np.sin(phi / 180 * np.pi)],
+                    [0, np.sin(phi / 180 * np.pi), np.cos(phi / 180 * np.pi)],
+                ]
+            ),
+        )
+        render_poses[i, :3, 3:4] = np.array(
+            [d * np.sin(th / 180 * np.pi), 0, -z + d - d * np.cos(th / 180 * np.pi)]
+        ).reshape(3, 1) + np.array(
+            [0, d * np.sin(phi / 180 * np.pi), -z + d - d * np.cos(phi / 180 * np.pi)]
+        ).reshape(
+            3, 1
+        )  # Transition vector
+    return render_poses
+
+
 def generate_seed_llff(degree, nviews, round=4, d=2.3):
     assert round % 4 == 0
     thlist = degree * np.sin(np.linspace(0, 2 * np.pi * round, nviews))

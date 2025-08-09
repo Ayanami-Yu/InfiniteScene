@@ -27,7 +27,13 @@ from .util.image_util import (
     get_tv_resample_method,
     resize_max_res,
 )
-from .util.depth_util import normalize_depth, normalize_depth_torch, interp_depth, renorm_depth, align_depth
+from .util.depth_util import (
+    normalize_depth,
+    normalize_depth_torch,
+    interp_depth,
+    renorm_depth,
+    align_depth,
+)
 
 
 class MurreDepthOutput(BaseOutput):
@@ -307,7 +313,9 @@ class MurrePipeline(DiffusionPipeline):
             pred_uncert = pred_uncert.squeeze().cpu().numpy()
 
         # Re-norm back to metric depth
-        depth_pred_metric = renorm_depth(depth_pred, d_min.cpu().numpy(), d_max.cpu().numpy())
+        depth_pred_metric = renorm_depth(
+            depth_pred, d_min.cpu().numpy(), d_max.cpu().numpy()
+        )
 
         # Align with sparse depth
         depth_pred_metric = align_depth(depth_pred_metric, sdpt.cpu().numpy())
