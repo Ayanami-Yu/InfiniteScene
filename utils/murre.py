@@ -14,10 +14,10 @@ def get_sparse_depth(points, ixt, ext, H, W):
     coord_img = coord_cam @ ixt.T
 
     coord_img[:, :2] = coord_img[:, :2] / coord_img[:, 2:]
+    x_coords = torch.clamp(coord_img[:, 0], 0, W - 1).long()
+    y_coords = torch.clamp(coord_img[:, 1], 0, H - 1).long()
+    depths = coord_img[:, 2]
+
     sdpt = torch.zeros(H, W, dtype=points.dtype, device=points.device)
-    for x, y, z in coord_img:
-        x, y = int(x), int(y)
-        x = min(max(x, 0), W - 1)
-        y = min(max(y, 0), H - 1)
-        sdpt[y, x] = z
+    sdpt[y_coords, x_coords] = depths
     return sdpt

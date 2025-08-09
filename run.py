@@ -134,7 +134,7 @@ if __name__ == "__main__":
         pipe.save_pretrained("stablediffusion/", safe_serialization=False)
         args.model_name = f"stablediffusion/{args.model_name}"
 
-    ld = Dreamer(for_gradio=False, save_dir=args.save_dir, version=args.version)
+    ld = Dreamer(for_gradio=False, save_dir=args.save_dir, version=args.version, murre_ckpt_path="/mnt/hdd1/hongyu/models/Murre")
     ld.create(
         rgb_cond,
         txt_cond,
@@ -149,5 +149,5 @@ if __name__ == "__main__":
     # ld.render_video_preset("back_and_forth")
     # ld.render_video_preset("llff")
     # ld.render_video_preset("headbanging")
-    # ld.render_video_preset("tapered")  # TODO test
+    # ld.render_video_preset("tapered")  # TODO rectify tapered orbit
     ld.render_video_preset("diving")

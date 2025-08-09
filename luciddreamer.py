@@ -41,7 +41,6 @@ from utils.camera import load_json
 from utils.depth import colorize
 from utils.lama import LaMa
 from utils.trajectory import get_pcdGenPoses
-from murre.pipeline import MurrePipeline
 
 
 get_kernel = lambda p: torch.ones(1, 1, p * 2 + 1, p * 2 + 1).to("cuda")
@@ -61,7 +60,7 @@ pad_mask = lambda x, padamount=1: t2np(
 
 
 class LucidDreamer:
-    def __init__(self, for_gradio=True, save_dir=None, torch_hub_local=True, depth_model="zoedepth", murre_ckpt_path=None, dtype=torch.float32, device="cuda"):
+    def __init__(self, for_gradio=True, save_dir=None, torch_hub_local=True, dtype=torch.float32, device="cuda"):
         self.dtype = dtype
         self.device = device
 
@@ -84,19 +83,13 @@ class LucidDreamer:
             # revision="fp16",
             torch_dtype=torch.float16,
         ).to("cuda")
-
-        self.d_model_name = depth_model
-        if depth_model == "zoedepth":
-            self.d_model = torch.hub.load(
-                "./ZoeDepth",
-                "ZoeD_N",
-                source="local" if torch_hub_local else "github",
-                pretrained=True,
-                load_local=torch_hub_local,
-            ).to("cuda")
-        elif depth_model == "murre":
-            assert murre_ckpt_path, "Provide the Murre checkpoint path"
-            self.d_model = MurrePipeline.from_pretrained(murre_ckpt_path, variant=None, torch_dtype=dtype).to(device)  # TODO test
+        self.d_model = torch.hub.load(
+            "./ZoeDepth",
+            "ZoeD_N",
+            source="local" if torch_hub_local else "github",
+            pretrained=True,
+            load_local=torch_hub_local,
+        ).to("cuda")
 
         self.controlnet = None
         self.lama = None

@@ -149,6 +149,8 @@ class MurrePipeline(DiffusionPipeline):
         Args:
             input_image (`Image`):
                 Input RGB (or gray-scale) image.
+            input_sparse_depth (`Tensor[H, W]`):
+                Input sparse depth map as torch tensor.
             denoising_steps (`int`, *optional*, defaults to `None`):
                 Number of denoising diffusion steps during inference. The default value `None` results in automatic
                 selection.
@@ -233,11 +235,10 @@ class MurrePipeline(DiffusionPipeline):
         # ----------------- Sparse Depth Preprocess -----------------
         assert sdpt.shape == rgb.shape[2:]
         # Normalize depth
-        # sdpt_norm, d_min, d_max = normalize_depth(sdpt, pre_clip_max=max_depth)
-        sdpt_norm, d_min, d_max = normalize_depth_torch(sdpt, pre_clip_max=max_depth)  # TODO test correctness
+        sdpt_norm, d_min, d_max = normalize_depth_torch(sdpt, pre_clip_max=max_depth)
 
         # Interpolate depth
-        idpt, dist = interp_depth(sdpt_norm)
+        idpt, dist = interp_depth(sdpt_norm.cpu().numpy())
         idpt, dist = torch.from_numpy(idpt), torch.from_numpy(dist)
         idpt = idpt * 2.0 - 1.0
 
@@ -306,10 +307,10 @@ class MurrePipeline(DiffusionPipeline):
             pred_uncert = pred_uncert.squeeze().cpu().numpy()
 
         # Re-norm back to metric depth
-        depth_pred_metric = renorm_depth(depth_pred, d_min, d_max)
+        depth_pred_metric = renorm_depth(depth_pred, d_min.cpu().numpy(), d_max.cpu().numpy())
 
         # Align with sparse depth
-        depth_pred_metric = align_depth(depth_pred_metric, sdpt)
+        depth_pred_metric = align_depth(depth_pred_metric, sdpt.cpu().numpy())
 
         # Colorize
         if color_map is not None:

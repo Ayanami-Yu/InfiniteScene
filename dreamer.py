@@ -14,6 +14,7 @@ from utils.trajectory import get_pcdGenPoses
 from utils.camera import get_render_cam, get_train_cam
 from gen_powers_10.model import GenPowers10Pipeline
 from gen_powers_10.utils import save_images
+from murre.pipeline import MurrePipeline
 from utils.murre import get_sparse_depth
 
 
@@ -24,13 +25,14 @@ class Dreamer(LucidDreamer):
         save_dir=None,
         torch_hub_local=True,
         version="DFIF_XL_L_X4",
-        depth_model="zoedepth", murre_ckpt_path=None, dtype=torch.float32, device="cuda"
+        murre_ckpt_path=None, dtype=torch.float32, device="cuda"
     ):
         super().__init__(
-            for_gradio=for_gradio, save_dir=save_dir, torch_hub_local=torch_hub_local, depth_model=depth_model, murre_ckpt_path=murre_ckpt_path, dtype=dtype, device=device
+            for_gradio=for_gradio, save_dir=save_dir, torch_hub_local=torch_hub_local, dtype=dtype, device=device
         )
         self.version = version
         self.zoom_model = GenPowers10Pipeline(version)
+        self.murre_model = MurrePipeline.from_pretrained(murre_ckpt_path, variant=None, torch_dtype=dtype).to(device)
 
     def create(
         self,
@@ -113,7 +115,7 @@ class Dreamer(LucidDreamer):
             # TODO test results of ZoeDepth
             img_zoomed = self.resize_image(imgs_zoomed[i])
             points_new, colors_new = self.backproject(
-                image=img_zoomed, K=cam_intri[i], cam_pose=torch.tensor(cam_extri[0], dtype=self.dtype, device=self.device)
+                image=img_zoomed, ixt=cam_intri[i], ext=torch.tensor(cam_extri[0], dtype=self.dtype, device=self.device), points=self.gaussians.get_xyz
             )
             # merge Gaussians and jointly train
             cam_train = get_train_cam(
@@ -202,7 +204,7 @@ class Dreamer(LucidDreamer):
             # TODO test results of ZoeDepth
             img_zoomed = self.resize_image(img_zoomed)
             points_new, colors_new = self.backproject(
-                image=img_zoomed, K=cam_intri[i], cam_pose=torch.tensor(cam_extri[0], dtype=self.dtype, device=self.device)
+                image=img_zoomed, ixt=cam_intri[i], ext=torch.tensor(cam_extri[0], dtype=self.dtype, device=self.device)
             )
             # merge Gaussians and jointly train
             cam_train = get_train_cam(
@@ -291,7 +293,7 @@ class Dreamer(LucidDreamer):
                     image=img_gt,
                     H=self.cam.H,
                     W=self.cam.W,
-                    cam_pose=cam_extri[i][j],
+                    ext=cam_extri[i][j],
                 )
                 # TODO implement version 2
 
@@ -369,28 +371,30 @@ class Dreamer(LucidDreamer):
             ]
         return images
 
-    def backproject(self, image, K, cam_pose):
+    def backproject(self, image, ixt, ext, points=None):
         """
         Params:
             image: PIL image for depth prediction.
-            K: Tensor[3, 3] Camera to image transformation.
-            cam_pose: Tensor[3, 4] World to camera transformation.
+            ixt: Tensor[3, 3] Camera to image transformation.
+            ext: Tensor[3, 4] World to camera transformation.
+            points: Tensor[N, 3] Existing point cloud coords which serves as the condition for Murre. If not provided, use ZoeDepth instead.
         Returns:
             coord_world: Tensor[3, N] The backprojected 3D points, where N is the number of points.
             colors: Tensor[N, 3] The colors corresponding to the 3D points.
         """
         dtype, device = self.dtype, self.device
-        depth = torch.tensor(self.d(image), device=device)
+        depth = self.pred_depth_with_pcd(image, points, ixt, ext) if points is not None else self.d(image)
+        depth = torch.tensor(depth, device=device)
         image = torch.tensor(np.array(image), dtype=dtype, device=device)
         H, W = image.shape[0], image.shape[1]  # TODO (H, W) or (W, H)
 
-        K_inv = torch.linalg.inv(K)
+        K_inv = torch.linalg.inv(ixt)
         x, y = torch.meshgrid(
             torch.arange(W, dtype=dtype, device=device),
             torch.arange(H, dtype=dtype, device=device),
             indexing="xy",
         )  # pixels
-        R, T = cam_pose[:3, :3], cam_pose[:3, 3:4]
+        R, T = ext[:3, :3], ext[:3, 3:4]
         R_inv = torch.linalg.inv(R)
         coord_cam = K_inv @ torch.stack(
             (x * depth, y * depth, 1 * depth), dim=0
@@ -400,23 +404,19 @@ class Dreamer(LucidDreamer):
         colors = image.reshape(-1, 3) / 255.0
         return coord_world, colors
     
-    def d(self, im: Image, points=None, ixt=None, ext=None, denoise_steps=10, ensemble_size=1):
-        if self.d_model_name == "zoedepth":
-            return self.d_model.infer_pil(im)
-        elif self.d_model_name == "murre":
-            sdpt = get_sparse_depth(
-                points=points, ixt=ixt, ext=ext, H=im.size[1], W=im.size[0]
-            )
-            depth_np, _ = self.d_model(
-                input_image=im,
-                input_sparse_depth=sdpt,  # TODO np?
-                max_depth=None,
-                denoising_steps=denoise_steps,
-                ensemble_size=ensemble_size,
-                processing_res=max(im.size[0], im.size[1]),
-                model_dtype=self.dtype,
-                show_progress_bar=True,
-            )
-        else:
-            raise ValueError("Unrecognized depth model name")
+    def pred_depth_with_pcd(self, im: Image, points=None, ixt=None, ext=None, denoise_steps=10, ensemble_size=1):
+        sdpt = get_sparse_depth(
+            points=points, ixt=ixt, ext=ext, H=im.size[1], W=im.size[0]
+        )
+        depth_np = self.murre_model(
+            input_image=im,
+            input_sparse_depth=sdpt,
+            max_depth=None,
+            denoising_steps=denoise_steps,
+            ensemble_size=ensemble_size,
+            processing_res=max(im.size[0], im.size[1]),
+            model_dtype=self.dtype,
+            show_progress_bar=True,
+        ).depth_np
+        return depth_np
 
