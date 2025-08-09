@@ -41,6 +41,7 @@ from utils.camera import load_json
 from utils.depth import colorize
 from utils.lama import LaMa
 from utils.trajectory import get_pcdGenPoses
+from murre.pipeline import MurrePipeline
 
 
 get_kernel = lambda p: torch.ones(1, 1, p * 2 + 1, p * 2 + 1).to("cuda")
@@ -60,7 +61,10 @@ pad_mask = lambda x, padamount=1: t2np(
 
 
 class LucidDreamer:
-    def __init__(self, for_gradio=True, save_dir=None, torch_hub_local=True):
+    def __init__(self, for_gradio=True, save_dir=None, torch_hub_local=True, depth_model="zoedepth", murre_ckpt_path=None, dtype=torch.float32, device="cuda"):
+        self.dtype = dtype
+        self.device = device
+
         self.cam = CameraParams()
         self.opt = GSParams()
         self.save_dir = save_dir
@@ -80,13 +84,20 @@ class LucidDreamer:
             # revision="fp16",
             torch_dtype=torch.float16,
         ).to("cuda")
-        self.d_model = torch.hub.load(
-            "./ZoeDepth",
-            "ZoeD_N",
-            source="local" if torch_hub_local else "github",
-            pretrained=True,
-            load_local=torch_hub_local,
-        ).to("cuda")
+
+        self.d_model_name = depth_model
+        if depth_model == "zoedepth":
+            self.d_model = torch.hub.load(
+                "./ZoeDepth",
+                "ZoeD_N",
+                source="local" if torch_hub_local else "github",
+                pretrained=True,
+                load_local=torch_hub_local,
+            ).to("cuda")
+        elif depth_model == "murre":
+            assert murre_ckpt_path, "Provide the Murre checkpoint path"
+            self.d_model = MurrePipeline.from_pretrained(murre_ckpt_path, variant=None, torch_dtype=dtype).to(device)  # TODO test
+
         self.controlnet = None
         self.lama = None
         self.current_model = self.default_model
@@ -959,7 +970,7 @@ class LucidDreamer:
             pts_coord_cam2 = R @ pts_coord_world + T
             pixel_coord_cam2 = (
                 K @ pts_coord_cam2
-            )  # [3, N] the previous 3D points in camera coord
+            )  # [3, N] the previous 3D points in image coord
 
             z = pixel_coord_cam2[2]
             x_homo = pixel_coord_cam2[0] / z

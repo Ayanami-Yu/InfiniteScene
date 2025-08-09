@@ -14,6 +14,7 @@ from utils.trajectory import get_pcdGenPoses
 from utils.camera import get_render_cam, get_train_cam
 from gen_powers_10.model import GenPowers10Pipeline
 from gen_powers_10.utils import save_images
+from utils.murre import get_sparse_depth
 
 
 class Dreamer(LucidDreamer):
@@ -23,16 +24,13 @@ class Dreamer(LucidDreamer):
         save_dir=None,
         torch_hub_local=True,
         version="DFIF_XL_L_X4",
-        dtype=torch.float32,
-        device="cuda",
+        depth_model="zoedepth", murre_ckpt_path=None, dtype=torch.float32, device="cuda"
     ):
         super().__init__(
-            for_gradio=for_gradio, save_dir=save_dir, torch_hub_local=torch_hub_local
+            for_gradio=for_gradio, save_dir=save_dir, torch_hub_local=torch_hub_local, depth_model=depth_model, murre_ckpt_path=murre_ckpt_path, dtype=dtype, device=device
         )
         self.version = version
         self.zoom_model = GenPowers10Pipeline(version)
-        self.dtype = dtype
-        self.device = device
 
     def create(
         self,
@@ -61,10 +59,90 @@ class Dreamer(LucidDreamer):
             os.makedirs(self.save_dir, exist_ok=True)
             outfile = self.save_ply(os.path.join(self.save_dir, "gsplat.ply"))
         return outfile
-
+    
     def create_scene(
         self, rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p, save_imgs=True
     ):
+        # generate camera trajectory
+        num_levels = len(txt_cond)
+        H, W = self.cam.H, self.cam.W
+        cam_extri = get_pcdGenPoses(pcdgenpath=pcdgenpath)
+        c2w = np.linalg.inv(np.concatenate((cam_extri[0], np.array([[0, 0, 0, 1]])), axis=0))
+        focalx = [self.cam.focal[0] * (p ** i) for i in range(num_levels)]
+        cam_intri = [
+            torch.tensor(
+                [
+                    [focalx[i], 0.0, self.cam.W / 2],
+                    [0.0, focalx[i], self.cam.H / 2],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=self.dtype,
+                device=self.device,
+            )
+            for i in range(num_levels)
+        ]
+        # generate zoom-in trajectory with interpolated cameras
+        focals = np.linspace(focalx[0], focalx[num_levels - 1], 201)
+        z_scales = [f / focalx[0] for f in focals]
+        minicams = [get_render_cam(focalx=f, c2w=c2w, H=H, W=W, z_scale=z_s) for f, z_s in zip(focals, z_scales)]
+        
+        imgs_zoomed = self.zoom_model(
+                txt_cond,
+                neg_txt_cond,
+                p,
+                num_inference_steps=diff_steps,
+                guidance_scale=7,
+                photograph=rgb_cond,
+                viz_step=0,
+            )
+        if save_imgs:
+            save_dir = f"{self.save_dir}/{self.version}"
+            save_images(imgs_zoomed, save_dir, txt_cond)
+
+        # generate the initial scene
+        traindata = self.generate_pcd_torch(
+            imgs_zoomed[0], txt_cond[0], neg_txt_cond, cam_extri, seed, diff_steps
+        )
+        self.scene = Scene(traindata, self.gaussians, self.opt)
+        self.training()
+        self.render_video(minicams, "zoom_before")
+        merger = GaussianMerger(self.scene.gaussians)
+
+        # zoom in (forward in a straight line)
+        for i in range(num_levels - 1):
+            # TODO test results of ZoeDepth
+            img_zoomed = self.resize_image(imgs_zoomed[i])
+            points_new, colors_new = self.backproject(
+                image=img_zoomed, K=cam_intri[i], cam_pose=torch.tensor(cam_extri[0], dtype=self.dtype, device=self.device)
+            )
+            # merge Gaussians and jointly train
+            cam_train = get_train_cam(
+                img=img_zoomed,
+                focalx=focalx[i + 1],
+                c2w=c2w,
+                H=H,
+                W=W,
+                white_background=self.opt.white_background,
+                z_scale=p ** (i + 1),
+            )
+            merger.merge_gaussians(
+                new_gaussian_attrs=merger.init_from_pcd(points_new.reshape(-1, 3), colors_new),
+                opt=self.opt,
+            )
+            self.training(cameras=[cam_train])
+
+        # save zoom-in video
+        self.render_video(minicams, "zoom_after")
+
+    def create_scene_v3(
+        self, rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p, save_imgs=True
+    ):
+        """
+        Process:
+            Generate zoomed-in image one at a time (the number of zoom-in levels of each zoom stack is 2).
+        Caveat:
+            Because zoomed-in images don't belong to the same zoom stack, inconsistency on the borders of zoomed-in images can be observed.
+        """
         # generate camera trajectory
         num_levels = len(txt_cond)
         H, W = self.cam.H, self.cam.W
@@ -89,6 +167,10 @@ class Dreamer(LucidDreamer):
             )
             for i in range(num_levels)
         ]
+        # generate zoom-in trajectory with interpolated cameras
+        focals = np.linspace(focalx[0], focalx[num_levels - 1], 201)
+        z_scales = [f / focalx[0] for f in focals]
+        minicams = [get_render_cam(focalx=f, c2w=c2w, H=H, W=W, z_scale=z_s) for f, z_s in zip(focals, z_scales)]
 
         # generate the initial scene
         traindata = self.generate_pcd_torch(
@@ -96,6 +178,7 @@ class Dreamer(LucidDreamer):
         )
         self.scene = Scene(traindata, self.gaussians, self.opt)
         self.training()
+        self.render_video(minicams, "zoom_before")
         merger = GaussianMerger(self.scene.gaussians)
 
         # zoom in (forward in a straight line)
@@ -137,11 +220,8 @@ class Dreamer(LucidDreamer):
             )
             self.training(cameras=[cam_train])
 
-        # save video using the zoom-in trajectory with interpolated cameras
-        focals = np.linspace(focalx[0], focalx[num_levels - 1], 201)
-        z_scales = [f / focalx[0] for f in focals]
-        minicams = [get_render_cam(focalx=f, c2w=c2w, H=H, W=W, z_scale=z_s) for f, z_s in zip(focals, z_scales)]
-        self.render_video(minicams, "zoom")
+        # save zoom-in video
+        self.render_video(minicams, "zoom_after")
 
     def create_scene_v2(
         self, rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p
@@ -319,3 +399,24 @@ class Dreamer(LucidDreamer):
         coord_world = R_inv @ coord_cam - R_inv @ T
         colors = image.reshape(-1, 3) / 255.0
         return coord_world, colors
+    
+    def d(self, im: Image, points=None, ixt=None, ext=None, denoise_steps=10, ensemble_size=1):
+        if self.d_model_name == "zoedepth":
+            return self.d_model.infer_pil(im)
+        elif self.d_model_name == "murre":
+            sdpt = get_sparse_depth(
+                points=points, ixt=ixt, ext=ext, H=im.size[1], W=im.size[0]
+            )
+            depth_np, _ = self.d_model(
+                input_image=im,
+                input_sparse_depth=sdpt,  # TODO np?
+                max_depth=None,
+                denoising_steps=denoise_steps,
+                ensemble_size=ensemble_size,
+                processing_res=max(im.size[0], im.size[1]),
+                model_dtype=self.dtype,
+                show_progress_bar=True,
+            )
+        else:
+            raise ValueError("Unrecognized depth model name")
+

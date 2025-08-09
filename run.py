@@ -1,3 +1,6 @@
+import torch
+torch.cuda.set_device(1)  # TODO remove it
+
 import os
 import argparse
 import json
@@ -144,7 +147,7 @@ if __name__ == "__main__":
     )
     # ld.render_video_preset(args.campath_render)
     # ld.render_video_preset("back_and_forth")
-    ld.render_video_preset("llff")
-    ld.render_video_preset("headbanging")
+    # ld.render_video_preset("llff")
+    # ld.render_video_preset("headbanging")
     # ld.render_video_preset("tapered")  # TODO test
     ld.render_video_preset("diving")

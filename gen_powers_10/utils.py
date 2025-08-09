@@ -66,4 +66,4 @@ def save_images(imgs, dir, prompts=None, name=None):
             )
     else:
         name = f'{prompts[0].lower().replace(".", "").replace(" ", "_")}.png' if name is None else name
-        img.save(f'{dir}/{name}')
+        imgs.save(f'{dir}/{name}')
