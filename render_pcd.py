@@ -43,6 +43,7 @@ if __name__ == "__main__":
             for i in range(n_views)
         ]
     else:
+        # TODO this is very coarse, find a better scheme for angle range
         n_steps = 5
         focals = np.linspace(focal, focal * p_max, n_steps)
         z_scales = [f / focal for f in focals]
