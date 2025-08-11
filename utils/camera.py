@@ -142,7 +142,7 @@ def camera_to_JSON(id, camera: Camera):
     return camera_entry
 
 
-def get_render_cam(focalx, c2w, H, W, z_scale=1.0):
+def get_render_cam(focal, c2w, H, W, z_scale=1.0):
     """
     Params:
         c2w: np.ndarray[4, 4] Camera to world transformation.
@@ -153,7 +153,7 @@ def get_render_cam(focalx, c2w, H, W, z_scale=1.0):
     R = np.transpose(w2c[:3, :3])  # R is stored transposed due to 'glm' in CUDA code
     T = w2c[:3, 3]
 
-    fovx = focal2fov(focalx, W)
+    fovx = focal2fov(focal, W)
     fovy = focal2fov(fov2focal(fovx, W), H)
 
     znear, zfar = 0.01 * z_scale, 100 * z_scale
@@ -183,7 +183,7 @@ def get_render_cam(focalx, c2w, H, W, z_scale=1.0):
     )
 
 
-def get_train_cam(img, focalx, c2w, H, W, white_background: bool, z_scale=1.0, idx=0):
+def get_train_cam(img, focal, c2w, H, W, white_background: bool, z_scale=1.0, idx=0):
     """
     Params:
         c2w: np.ndarray[4, 4] Camera to world transformation.
@@ -197,7 +197,7 @@ def get_train_cam(img, focalx, c2w, H, W, white_background: bool, z_scale=1.0, i
 
     bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
 
-    fovx = focal2fov(focalx, W)
+    fovx = focal2fov(focal, W)
     fovy = focal2fov(fov2focal(fovx, W), H)
 
     img = np.array(img.convert("RGBA")) / 255.0
@@ -244,7 +244,7 @@ def prepare_cameras_zoom_in(
     focals_interp = np.linspace(focals[0], focals[n_levels - 1], n_views)
     z_scales = [f / focals[0] for f in focals_interp]
     cams_diving = [
-        get_render_cam(focalx=f, c2w=c2w_init, H=H, W=W, z_scale=z_s)
+        get_render_cam(focal=f, c2w=c2w_init, H=H, W=W, z_scale=z_s)
         for f, z_s in zip(focals_interp, z_scales)
     ]
     w2c_llff = generate_seed_llff(5, n_views, round=4, d=0)
@@ -254,7 +254,7 @@ def prepare_cameras_zoom_in(
     ]
     cams_diving_llff = [
         get_render_cam(
-            focalx=focals_interp[i], c2w=c2w_llff[i], H=H, W=W, z_scale=z_scales[i]
+            focal=focals_interp[i], c2w=c2w_llff[i], H=H, W=W, z_scale=z_scales[i]
         )
         for i in range(n_views)
     ]

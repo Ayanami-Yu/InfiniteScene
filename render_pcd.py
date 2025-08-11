@@ -39,7 +39,7 @@ if __name__ == "__main__":
             for i in range(n_views)
         ]
         cams = [
-            get_render_cam(focalx=focals[i], c2w=c2w[i], H=H, W=W, z_scale=z_scales[i])
+            get_render_cam(focal=focals[i], c2w=c2w[i], H=H, W=W, z_scale=z_scales[i])
             for i in range(n_views)
         ]
     else:
@@ -65,7 +65,7 @@ if __name__ == "__main__":
             for i in range(n_steps * (n_views // n_steps))
         ]
         cams = [
-            get_render_cam(focalx=f[i], c2w=c2w[i], H=H, W=W, z_scale=z_s[i])
+            get_render_cam(focal=f[i], c2w=c2w[i], H=H, W=W, z_scale=z_s[i])
             for i in range(n_steps * (n_views // n_steps))
         ]
 

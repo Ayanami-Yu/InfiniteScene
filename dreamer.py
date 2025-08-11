@@ -13,13 +13,14 @@ from arguments import CameraParams, GSParams
 from scene import Scene
 from scene.gaussian_merger import GaussianMerger
 from gaussian_renderer import render
-from utils.trajectory import get_pcdGenPoses, generate_seed_llff
+from utils.trajectory import get_pcdGenPoses, generate_seed_llff, generate_lookdown_specified
 from utils.camera import get_render_cam, get_train_cam, prepare_cameras_zoom_in
 from gen_powers_10.model import GenPowers10Pipeline
 from gen_powers_10.utils import save_images
 from murre.pipeline import MurrePipeline
 from utils.murre import get_sparse_depth
 from utils.scipy import interp_grid, maximum_filter, minimum_filter
+from crafter import Crafter
 
 
 class Dreamer(LucidDreamer):
@@ -568,14 +569,14 @@ class Dreamer(LucidDreamer):
                 os.makedirs(self.save_dir)
             outfile = self.save_ply(os.path.join(self.save_dir, "gsplat.ply"))
         else:  # use Powers of Ten
-            self.create_scene_v4(  # TODO
+            self.create_scene(  # TODO
                 rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p
             )
             os.makedirs(self.save_dir, exist_ok=True)
             outfile = self.save_ply(os.path.join(self.save_dir, "gsplat.ply"))
         return outfile
 
-    def create_scene(
+    def create_scene_v6(
         self,
         rgb_cond,
         txt_cond,
@@ -584,6 +585,7 @@ class Dreamer(LucidDreamer):
         seed,
         diff_steps,
         p,
+        nvs_cfg="configs/inference_pvd_512.yaml",
     ):
         """
         Process:
@@ -592,13 +594,13 @@ class Dreamer(LucidDreamer):
         """
         # generate camera trajectory
         n_levels = len(txt_cond)
-        H, W = self.cam.H, self.cam.W
+        H, W, focal = self.cam.H, self.cam.W, self.cam.focal[0]
         focals, c2w_init, cams_ext_init, cams_ixt, cams_diving, cams_diving_llff = (
             prepare_cameras_zoom_in(
                 pcdgenpath,
                 n_levels,
                 n_views=201,
-                focal=self.cam.focal[0],
+                focal=focal,
                 H=self.cam.H,
                 W=self.cam.W,
                 p=p,
@@ -610,10 +612,10 @@ class Dreamer(LucidDreamer):
             txt_cond, neg_txt_cond, diff_steps, p, rgb_cond=rgb_cond
         )
         imgs_zoomed = [self.resize_image(img) for img in imgs_zoomed]
-        cam_train = [
+        cams_train = [
             get_train_cam(
                 img=imgs_zoomed[i],
-                focalx=focals[i],
+                focal=focals[i],
                 c2w=c2w_init,
                 H=H,
                 W=W,
@@ -639,12 +641,6 @@ class Dreamer(LucidDreamer):
         self.render_video(cams_diving_llff, "llff_zoom_before")
         self.render_video(cams_diving, "diving_zoom_before")
 
-        # TODO test if CUDA OOM
-        # del self.d_model
-        # del self.zoom_model
-        # gc.collect()
-        # torch.cuda.empty_cache()
-
         # zoom in (forward in a straight line)
         merger = GaussianMerger(self.scene.gaussians)
         for i in range(1, n_levels):
@@ -662,8 +658,37 @@ class Dreamer(LucidDreamer):
                 ),
                 opt=self.opt,
             )
-        self.opt = GSParams(iterations=5990)
-        self.training(cameras=cam_train)
+        self.opt = GSParams(iterations=2990)
+        self.training(cameras=cams_train)
+
+        # TODO test if CUDA OOM
+        # del self.d_model
+        # del self.zoom_model
+        # gc.collect()
+        # torch.cuda.empty_cache()
+
+        self.nvs_model = Crafter(cfg_path=nvs_cfg)  # TODO test
+        n_frames = 25
+        for i in range(n_levels):
+            ext_zoom = generate_lookdown_specified(deg_denom=p ** i)
+            c2ws_zoom = np.linalg.inv(np.concatenate((ext_zoom, np.repeat(np.array([[[0, 0, 0, 1]]]), ext_zoom.shape[0], axis=0))))
+            cams_render = [get_render_cam(focal=focals[i], c2w=c2ws_zoom[j], H=H, W=W, z_scale=focals[i] / focal) for j in range(n_frames)]
+            imgs_render = [render(cams_render[j], self.gaussians, self.opt, self.background)["render"] for j in range(n_frames)]
+            imgs_nvs = (self.nvs_model(imgs_render) + 1.0) / 2.0
+            cams_train.extend([
+                get_train_cam(
+                    img=imgs_nvs[j],
+                    focal=focals[i],
+                    c2w=c2ws_zoom[j],
+                    H=H,
+                    W=W,
+                    white_background=self.opt.white_background,
+                    z_scale=focals[i] / focal,
+                )
+                for j in range(n_frames)
+            ])
+        self.opt = GSParams(iterations=8990)
+        self.training(cameras=cams_train)
 
         # save zoom-in videos
         self.render_video(cams_diving, "diving_zoom_after")
@@ -708,7 +733,7 @@ class Dreamer(LucidDreamer):
         focals = np.linspace(focalx[0], focalx[num_levels - 1], n_views)
         z_scales = [f / focalx[0] for f in focals]
         cams_diving = [
-            get_render_cam(focalx=f, c2w=c2w_init, H=H, W=W, z_scale=z_s)
+            get_render_cam(focal=f, c2w=c2w_init, H=H, W=W, z_scale=z_s)
             for f, z_s in zip(focals, z_scales)
         ]
         w2c_llff = generate_seed_llff(5, n_views, round=4, d=0)
@@ -720,7 +745,7 @@ class Dreamer(LucidDreamer):
         ]
         cams_diving_llff = [
             get_render_cam(
-                focalx=focals[i], c2w=c2w_llff[i], H=H, W=W, z_scale=z_scales[i]
+                focal=focals[i], c2w=c2w_llff[i], H=H, W=W, z_scale=z_scales[i]
             )
             for i in range(n_views)
         ]
@@ -733,7 +758,7 @@ class Dreamer(LucidDreamer):
         cam_train = [
             get_train_cam(
                 img=imgs_zoomed[i],
-                focalx=focalx[i],
+                focal=focalx[i],
                 c2w=c2w_init,
                 H=H,
                 W=W,
@@ -844,7 +869,7 @@ class Dreamer(LucidDreamer):
             # merge Gaussians and jointly train
             cam_train = get_train_cam(
                 img=img_zoomed,
-                focalx=focals[i],
+                focal=focals[i],
                 c2w=c2w_init,
                 H=H,
                 W=W,
@@ -901,14 +926,14 @@ class Dreamer(LucidDreamer):
             for i in range(num_levels)
         ]
         cam_render = [
-            get_render_cam(focalx=focalx[i], c2w=c2w, H=H, W=W, z_scale=p**i)
+            get_render_cam(focal=focalx[i], c2w=c2w, H=H, W=W, z_scale=p**i)
             for i in range(num_levels)
         ]
         # generate zoom-in trajectory with interpolated cameras
         focals = np.linspace(focalx[0], focalx[num_levels - 1], 201)
         z_scales = [f / focalx[0] for f in focals]
         minicams = [
-            get_render_cam(focalx=f, c2w=c2w, H=H, W=W, z_scale=z_s)
+            get_render_cam(focal=f, c2w=c2w, H=H, W=W, z_scale=z_s)
             for f, z_s in zip(focals, z_scales)
         ]
 
@@ -954,7 +979,7 @@ class Dreamer(LucidDreamer):
             # merge Gaussians and jointly train
             cam_train = get_train_cam(
                 img=img_zoomed,
-                focalx=focalx[i + 1],
+                focal=focalx[i + 1],
                 c2w=c2w,
                 H=H,
                 W=W,
@@ -1004,7 +1029,7 @@ class Dreamer(LucidDreamer):
         minicams = [
             [
                 get_render_cam(
-                    focalx=cam_focal[i], c2w=cam_extri[i][j], H=self.cam.H, W=self.cam.W
+                    focal=cam_focal[i], c2w=cam_extri[i][j], H=self.cam.H, W=self.cam.W
                 )
                 for j in range(len(cam_extri[i]))
             ]

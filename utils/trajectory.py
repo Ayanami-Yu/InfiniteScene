@@ -999,6 +999,49 @@ def generate_seed_newpreset(deg_denom=1):
     return render_poses
 
 
+def generate_lookdown_specified(deg_denom=1):
+    """
+    The original "lookdown" trajectory with the number of poses amounting to 25 for the input requirement of ViewCrafter.
+    """
+    th_max = 60 / deg_denom
+    phi_max = 22.5 / deg_denom
+    thlist = np.concatenate(
+        (
+            np.linspace(0, th_max, 7),
+            np.linspace(0, -th_max, 7)[1:],
+            np.linspace(0, th_max, 7),
+            np.linspace(0, -th_max, 6)[1:],
+        )
+    )
+    philist = np.concatenate((np.linspace(0, 0, 13), np.linspace(phi_max, phi_max, 12)))
+    assert len(thlist) == len(philist)
+
+    render_poses = np.zeros((len(thlist), 3, 4))
+    for i in range(len(thlist)):
+        th = thlist[i]
+        phi = philist[i]
+
+        render_poses[i, :3, :3] = np.matmul(
+            np.array(
+                [
+                    [np.cos(th / 180 * np.pi), 0, -np.sin(th / 180 * np.pi)],
+                    [0, 1, 0],
+                    [np.sin(th / 180 * np.pi), 0, np.cos(th / 180 * np.pi)],
+                ]
+            ),
+            np.array(
+                [
+                    [1, 0, 0],
+                    [0, np.cos(phi / 180 * np.pi), -np.sin(phi / 180 * np.pi)],
+                    [0, np.sin(phi / 180 * np.pi), np.cos(phi / 180 * np.pi)],
+                ]
+            ),
+        )
+        render_poses[i, :3, 3:4] = np.zeros((3, 1))
+
+    return render_poses
+
+
 def generate_seed_horizon():
     movement = np.linspace(0, 5, 11)
     render_poses = np.zeros((len(movement), 3, 4))
@@ -1744,6 +1787,23 @@ def getCameraPaths():
         preset_json[cam_path] = blender_train_json
 
     return preset_json
+
+
+def generate_obj_centric_orbit(depth_obj, ext, K, y, x, dtype=torch.float32, device="cuda"):
+    """
+    Args:
+        depth_obj: Scalar tensor giving the depth corresponding to the pixel (y, x)
+        ext: Tensor[N, 3, 4] where N is the number of camera poses
+    """
+    # obtain world coord of the given 2D point
+    R, T = ext[:, :3, :3], ext[:, :3, 3:4]
+    R_inv = torch.linalg.inv(R)
+    K_inv = torch.linalg.inv(K)
+    obj_c = K_inv @ torch.tensor([x * depth_obj, y * depth_obj, 1 * depth_obj], dtype=dtype, device=device).T
+    obj_w = R_inv @ obj_c - R_inv @ T
+
+    cam_w = -R.T @ T
+    # TODO test directly using the (scaled) original poses to see if changing to obj coord is necessary
 
 
 def main():
