@@ -1,6 +1,6 @@
 import torch
 
-torch.cuda.set_device(0)  # TODO remove it
+torch.cuda.set_device(4)  # TODO remove it
 
 import os
 import argparse

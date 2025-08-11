@@ -21,6 +21,7 @@ from utils.graphics import (
     getProjectionMatrix,
     getWorld2View2,
 )
+from utils.trajectory import get_pcdGenPoses, generate_seed_llff
 
 
 WARNED = False
@@ -216,3 +217,45 @@ def get_train_cam(img, focalx, c2w, H, W, white_background: bool, z_scale=1.0, i
         data_device="cuda",
         z_scale=z_scale,
     )
+
+
+def prepare_cameras_zoom_in(
+    pcdgenpath, n_levels, n_views, focal, H, W, p, dtype=torch.float32, device="cuda"
+):
+    cams_ext_init = get_pcdGenPoses(pcdgenpath=pcdgenpath)
+    c2w_init = np.linalg.inv(
+        np.concatenate((cams_ext_init[0], np.array([[0, 0, 0, 1]])), axis=0)
+    )
+    focals = [focal * (p**i) for i in range(n_levels)]
+    cams_ixt = [
+        torch.tensor(
+            [
+                [focals[i], 0.0, W / 2],
+                [0.0, focals[i], H / 2],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=dtype,
+            device=device,
+        )
+        for i in range(n_levels)
+    ]
+
+    # generate zoom-in trajectory with interpolated cameras
+    focals_interp = np.linspace(focals[0], focals[n_levels - 1], n_views)
+    z_scales = [f / focals[0] for f in focals_interp]
+    cams_diving = [
+        get_render_cam(focalx=f, c2w=c2w_init, H=H, W=W, z_scale=z_s)
+        for f, z_s in zip(focals_interp, z_scales)
+    ]
+    w2c_llff = generate_seed_llff(5, n_views, round=4, d=0)
+    c2w_llff = [
+        np.linalg.inv(np.concatenate((w2c_llff[i], np.array([[0, 0, 0, 1]])), axis=0))
+        for i in range(n_views)
+    ]
+    cams_diving_llff = [
+        get_render_cam(
+            focalx=focals_interp[i], c2w=c2w_llff[i], H=H, W=W, z_scale=z_scales[i]
+        )
+        for i in range(n_views)
+    ]
+    return focals, c2w_init, cams_ext_init, cams_ixt, cams_diving, cams_diving_llff

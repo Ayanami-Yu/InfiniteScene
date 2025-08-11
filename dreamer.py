@@ -1,4 +1,5 @@
 import os
+import gc
 import datetime
 import torch
 import numpy as np
@@ -13,7 +14,7 @@ from scene import Scene
 from scene.gaussian_merger import GaussianMerger
 from gaussian_renderer import render
 from utils.trajectory import get_pcdGenPoses, generate_seed_llff
-from utils.camera import get_render_cam, get_train_cam
+from utils.camera import get_render_cam, get_train_cam, prepare_cameras_zoom_in
 from gen_powers_10.model import GenPowers10Pipeline
 from gen_powers_10.utils import save_images
 from murre.pipeline import MurrePipeline
@@ -567,7 +568,7 @@ class Dreamer(LucidDreamer):
                 os.makedirs(self.save_dir)
             outfile = self.save_ply(os.path.join(self.save_dir, "gsplat.ply"))
         else:  # use Powers of Ten
-            self.create_scene(  # TODO
+            self.create_scene_v4(  # TODO
                 rgb_cond, txt_cond, neg_txt_cond, pcdgenpath, seed, diff_steps, p
             )
             os.makedirs(self.save_dir, exist_ok=True)
@@ -575,6 +576,100 @@ class Dreamer(LucidDreamer):
         return outfile
 
     def create_scene(
+        self,
+        rgb_cond,
+        txt_cond,
+        neg_txt_cond,
+        pcdgenpath,
+        seed,
+        diff_steps,
+        p,
+    ):
+        """
+        Process:
+            1) Incorporate ViewCrafter to expand training dataset at each zoom-in level.
+            2) Train Gaussians jointly at all zoom-in levels with expanded dataset.
+        """
+        # generate camera trajectory
+        n_levels = len(txt_cond)
+        H, W = self.cam.H, self.cam.W
+        focals, c2w_init, cams_ext_init, cams_ixt, cams_diving, cams_diving_llff = (
+            prepare_cameras_zoom_in(
+                pcdgenpath,
+                n_levels,
+                n_views=201,
+                focal=self.cam.focal[0],
+                H=self.cam.H,
+                W=self.cam.W,
+                p=p,
+            )
+        )
+
+        # generate dataset for training
+        imgs_zoomed = self.generate_zoom_stack(
+            txt_cond, neg_txt_cond, diff_steps, p, rgb_cond=rgb_cond
+        )
+        imgs_zoomed = [self.resize_image(img) for img in imgs_zoomed]
+        cam_train = [
+            get_train_cam(
+                img=imgs_zoomed[i],
+                focalx=focals[i],
+                c2w=c2w_init,
+                H=H,
+                W=W,
+                white_background=self.opt.white_background,
+                z_scale=p**i,
+            )
+            for i in range(n_levels)
+        ]
+
+        # generate the initial scene
+        traindata = self.generate_pcd_torch(
+            imgs_zoomed[0],
+            txt_cond[0],
+            neg_txt_cond,
+            cams_ext_init,
+            seed,
+            diff_steps,
+            depth_model="murre",
+        )
+        self.scene = Scene(traindata, self.gaussians, self.opt)
+        self.training()
+
+        self.render_video(cams_diving_llff, "llff_zoom_before")
+        self.render_video(cams_diving, "diving_zoom_before")
+
+        # TODO test if CUDA OOM
+        # del self.d_model
+        # del self.zoom_model
+        # gc.collect()
+        # torch.cuda.empty_cache()
+
+        # zoom in (forward in a straight line)
+        merger = GaussianMerger(self.scene.gaussians)
+        for i in range(1, n_levels):
+            points_new, colors_new = self.backproject(
+                image=imgs_zoomed[i],
+                ixt=cams_ixt[i],
+                ext=torch.tensor(
+                    cams_ext_init[0], dtype=self.dtype, device=self.device
+                ),
+                points=self.gaussians.get_xyz,
+            )
+            merger.merge_gaussians(
+                new_gaussian_attrs=merger.init_from_pcd(
+                    points_new.reshape(-1, 3), colors_new
+                ),
+                opt=self.opt,
+            )
+        self.opt = GSParams(iterations=5990)
+        self.training(cameras=cam_train)
+
+        # save zoom-in videos
+        self.render_video(cams_diving, "diving_zoom_after")
+        self.render_video(cams_diving_llff, "llff_zoom_after")
+
+    def create_scene_v5(
         self,
         rgb_cond,
         txt_cond,
@@ -686,6 +781,7 @@ class Dreamer(LucidDreamer):
         self.render_video(cams_diving, "diving_zoom_after")
         self.render_video(cams_diving_llff, "llff_zoom_after")
 
+    # TODO test the corrected V4
     def create_scene_v4(
         self,
         rgb_cond,
@@ -701,32 +797,20 @@ class Dreamer(LucidDreamer):
             Progressively and individually train Gaussians one zoom-in level at a time.
         """
         # generate camera trajectory
-        num_levels = len(txt_cond)
+        n_levels = len(txt_cond)
         H, W = self.cam.H, self.cam.W
-        cam_extri = get_pcdGenPoses(pcdgenpath=pcdgenpath)
-        c2w = np.linalg.inv(
-            np.concatenate((cam_extri[0], np.array([[0, 0, 0, 1]])), axis=0)
-        )
-        focalx = [self.cam.focal[0] * (p**i) for i in range(num_levels)]
-        cam_intri = [
-            torch.tensor(
-                [
-                    [focalx[i], 0.0, self.cam.W / 2],
-                    [0.0, focalx[i], self.cam.H / 2],
-                    [0.0, 0.0, 1.0],
-                ],
-                dtype=self.dtype,
-                device=self.device,
+        focals, c2w_init, cams_ext_init, cams_ixt, cams_diving, cams_diving_llff = (
+            prepare_cameras_zoom_in(
+                pcdgenpath,
+                n_levels,
+                n_views=201,
+                focal=self.cam.focal[0],
+                H=self.cam.H,
+                W=self.cam.W,
+                p=p,
             )
-            for i in range(num_levels)
-        ]
+        )
         # generate zoom-in trajectory with interpolated cameras
-        focals = np.linspace(focalx[0], focalx[num_levels - 1], 201)
-        z_scales = [f / focalx[0] for f in focals]
-        minicams = [
-            get_render_cam(focalx=f, c2w=c2w, H=H, W=W, z_scale=z_s)
-            for f, z_s in zip(focals, z_scales)
-        ]
         imgs_zoomed = self.generate_zoom_stack(
             txt_cond, neg_txt_cond, diff_steps, p, rgb_cond=rgb_cond
         )
@@ -736,30 +820,32 @@ class Dreamer(LucidDreamer):
             imgs_zoomed[0],
             txt_cond[0],
             neg_txt_cond,
-            cam_extri,
+            cams_ext_init,
             seed,
             diff_steps,
             depth_model="murre",
         )
         self.scene = Scene(traindata, self.gaussians, self.opt)
         self.training()
-        self.render_video(minicams, "zoom_before")
-        merger = GaussianMerger(self.scene.gaussians)
+
+        self.render_video(cams_diving_llff, "llff_zoom_before")
+        self.render_video(cams_diving, "diving_zoom_before")
 
         # zoom in (forward in a straight line)
-        for i in range(1, num_levels):
+        merger = GaussianMerger(self.scene.gaussians)
+        for i in range(1, n_levels):
             img_zoomed = self.resize_image(imgs_zoomed[i])
             points_new, colors_new = self.backproject(
                 image=img_zoomed,
-                ixt=cam_intri[i],
-                ext=torch.tensor(cam_extri[0], dtype=self.dtype, device=self.device),
+                ixt=cams_ixt[i],
+                ext=torch.tensor(cams_ext_init[0], dtype=self.dtype, device=self.device),
                 points=self.gaussians.get_xyz,
             )
             # merge Gaussians and jointly train
             cam_train = get_train_cam(
                 img=img_zoomed,
-                focalx=focalx[i],
-                c2w=c2w,
+                focalx=focals[i],
+                c2w=c2w_init,
                 H=H,
                 W=W,
                 white_background=self.opt.white_background,
@@ -774,7 +860,8 @@ class Dreamer(LucidDreamer):
             self.training(cameras=[cam_train])
 
         # save zoom-in video
-        self.render_video(minicams, "zoom_after")
+        self.render_video(cams_diving, "diving_zoom_after")
+        self.render_video(cams_diving_llff, "llff_zoom_after")
 
     def create_scene_v3(
         self,

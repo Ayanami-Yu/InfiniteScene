@@ -52,7 +52,11 @@ if __name__ == "__main__":
         f = []
         z_s = []
         for i in range(n_steps):
-            w2c.append(generate_llff_scaling(4 / z_scales[i], 4 / z_scales[i], n_views // n_steps, round=4, d=0))
+            w2c.append(
+                generate_llff_scaling(
+                    4 / z_scales[i], 4 / z_scales[i], n_views // n_steps, round=4, d=0
+                )
+            )
             f.extend([focals[i]] * (n_views // n_steps))
             z_s.extend([z_scales[i]] * (n_views // n_steps))
         w2c = np.concatenate(w2c, axis=0)

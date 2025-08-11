@@ -29,9 +29,7 @@ def blend_overlay(background, overlay, alpha):
 
 # TODO test using interpolated frames for training Gaussians
 # TODO estimate camera poses for interpolated images
-def interp_zoomed_images(
-    images, zoom_factor=2.0, fps=30, frames_per_transition=60
-):
+def interp_zoomed_images(images, zoom_factor=2.0, fps=30, frames_per_transition=60):
     """
     Params:
         images: List[array[H, W, C]] of dtype uint8 in range [0, 255]
@@ -59,5 +57,5 @@ def interp_zoomed_images(
     hold_frames = int(0.5 * fps)
     for _ in range(hold_frames):
         imgs_interp.append(images[-1])
-    
+
     return imgs_interp
