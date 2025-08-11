@@ -395,7 +395,7 @@ class MidasCore(nn.Module):
         img_size = kwargs.pop("img_size", [384, 384])
         print("img_size", img_size)
         midas = torch.hub.load(
-            "isl-org/MiDaS",
+            "submodules/MiDaS" if load_local else "isl-org/MiDaS",
             midas_model_type,
             pretrained=use_pretrained_midas,
             force_reload=force_reload,

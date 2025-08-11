@@ -6,3 +6,8 @@
 [submodule "submodules/cupy"]
 	path = submodules/cupy
 	url = https://github.com/Ayanami-Yu/cupy.git
+
+# for loading local model when using torch.hub.load
+[submodule "submodules/MiDaS"]
+	path = submodules/MiDaS
+	url = https://github.com/isl-org/MiDaS.git

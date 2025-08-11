@@ -5,7 +5,7 @@ import numpy as np
 import torch.nn as nn
 from einops import rearrange
 from viewcrafter.diffusion_utils import instantiate_from_config
-from lvdm.modules.attention import LinearAttention
+from ...modules.attention import LinearAttention
 
 
 def nonlinearity(x):

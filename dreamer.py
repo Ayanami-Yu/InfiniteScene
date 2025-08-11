@@ -576,7 +576,7 @@ class Dreamer(LucidDreamer):
             outfile = self.save_ply(os.path.join(self.save_dir, "gsplat.ply"))
         return outfile
 
-    def create_scene_v6(
+    def create_scene(
         self,
         rgb_cond,
         txt_cond,

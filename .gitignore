@@ -212,6 +212,3 @@ gradio_cached_examples
 tmp
 nohup.out
 # submodules/depth-diff-gaussian-rasterization-min/third_party/glm
-
-# for loading local model when using torch.hub.load
-isl-org

@@ -5,8 +5,8 @@ import numpy as np
 from einops import rearrange
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from lvdm.modules.networks.ae_modules import Encoder, Decoder
-from lvdm.distributions import DiagonalGaussianDistribution
+from ..modules.networks.ae_modules import Encoder, Decoder
+from ..distributions import DiagonalGaussianDistribution
 from viewcrafter.diffusion_utils import instantiate_from_config
 
 

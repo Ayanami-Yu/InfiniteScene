@@ -5,8 +5,8 @@ import torch
 import torch.distributed as dist
 from collections import OrderedDict
 import os
-from lvdm.models.samplers.ddim import DDIMSampler
-from lvdm.models.samplers.ddim_multiplecond import DDIMSampler as DDIMSampler_multicond
+from .lvdm.models.samplers.ddim import DDIMSampler
+from .lvdm.models.samplers.ddim_multiplecond import DDIMSampler as DDIMSampler_multicond
 from einops import rearrange, repeat
 
 

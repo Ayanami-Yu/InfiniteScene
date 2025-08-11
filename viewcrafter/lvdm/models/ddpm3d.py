@@ -24,11 +24,11 @@ import pytorch_lightning as pl
 from pytorch_lightning.utilities import rank_zero_only
 from viewcrafter.diffusion_utils import instantiate_from_config
 from lvdm.ema import LitEma
-from lvdm.models.samplers.ddim import DDIMSampler
-from lvdm.distributions import DiagonalGaussianDistribution
-from lvdm.models.utils_diffusion import make_beta_schedule, rescale_zero_terminal_snr
-from lvdm.basics import disabled_train
-from lvdm.common import extract_into_tensor, noise_like, exists, default
+from .samplers.ddim import DDIMSampler
+from ..distributions import DiagonalGaussianDistribution
+from .utils_diffusion import make_beta_schedule, rescale_zero_terminal_snr
+from ..basics import disabled_train
+from ..common import extract_into_tensor, noise_like, exists, default
 
 __conditioning_keys__ = {"concat": "c_concat", "crossattn": "c_crossattn", "adm": "y"}
 

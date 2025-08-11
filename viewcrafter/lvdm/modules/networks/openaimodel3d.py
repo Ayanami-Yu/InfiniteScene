@@ -4,10 +4,10 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 import torch.nn.functional as F
-from lvdm.models.utils_diffusion import timestep_embedding
-from lvdm.common import checkpoint
-from lvdm.basics import zero_module, conv_nd, linear, avg_pool_nd, normalization
-from lvdm.modules.attention import SpatialTransformer, TemporalTransformer
+from ...models.utils_diffusion import timestep_embedding
+from ...common import checkpoint
+from ...basics import zero_module, conv_nd, linear, avg_pool_nd, normalization
+from ...modules.attention import SpatialTransformer, TemporalTransformer
 
 
 class TimestepBlock(nn.Module):
