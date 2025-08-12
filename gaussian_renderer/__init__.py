@@ -8,7 +8,7 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
-
+import gc
 import math
 import random
 
@@ -23,7 +23,7 @@ from scene.gaussian_model import GaussianModel
 def render(
     viewpoint_camera,
     pc: GaussianModel,
-    pipe,
+    opts,
     bg_color: torch.Tensor,
     scaling_modifier=1.0,
     black_video=False,
@@ -52,6 +52,9 @@ def render(
     except:
         pass
 
+    
+    # TODO
+    #########################################
     if black_video:
         bg_color = torch.zeros_like(bg_color)
     # Aug
@@ -65,9 +68,9 @@ def render(
             bg_color = torch.rand_like(bg_color)
         else:
             bg_color = torch.zeros_like(bg_color)
-        # bg_color = torch.zeros_like(bg_color)
+    #########################################
 
-    # bg_color = torch.zeros_like(bg_color)
+
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
     tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
@@ -112,7 +115,7 @@ def render(
     scales = None
     rotations = None
     cov3D_precomp = None
-    if pipe.compute_cov3D_python:
+    if opts.compute_cov3D_python:
         cov3D_precomp = pc.get_covariance(scaling_modifier)
     else:
         scales = pc.get_scaling
@@ -123,7 +126,7 @@ def render(
     shs = None
     colors_precomp = None
     if colors_precomp is None:
-        if pipe.convert_SHs_python:
+        if opts.convert_SHs_python:
             raw_rgb = (
                 pc.get_features.transpose(1, 2)
                 .view(-1, 3, (pc.max_sh_degree + 1) ** 2)
@@ -136,7 +139,10 @@ def render(
     else:
         colors_precomp = override_color
 
-    if random.random() < shs_aug_ratio and not test:
+
+    # TODO
+    #########################################
+    if random.random() < shs_aug_ratio and not test:  # FIXME why make it always true
         variance = (0.2**0.5) * shs
         shs = shs + (torch.randn_like(shs) * variance)
 
@@ -144,6 +150,8 @@ def render(
     if random.random() < scale_aug_ratio and not test:
         variance = (0.2**0.5) * scales / 4
         scales = torch.clamp(scales + (torch.randn_like(scales) * variance), 0.0)
+    #########################################
+
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
     rendered_image, radii, depth_alpha = rasterizer(
@@ -167,6 +175,11 @@ def render(
         min_d = disp.min()
 
     disp = torch.clamp((disp - min_d) / (disp.max() - min_d), 0.0, 1.0)
+
+    # FIXME memory leak caused by shs
+    # del shs
+    # gc.collect()
+    # torch.cuda.empty_cache()
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.

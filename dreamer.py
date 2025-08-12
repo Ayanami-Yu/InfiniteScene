@@ -24,6 +24,7 @@ from gen_powers_10.utils import save_images
 from murre.pipeline import MurrePipeline
 from utils.murre import get_sparse_depth
 from utils.scipy import interp_grid, maximum_filter, minimum_filter
+from utils.image import crop_images
 from crafter import Crafter
 
 
@@ -663,56 +664,60 @@ class Dreamer(LucidDreamer):
                 ),
                 opt=self.opt,
             )
-        # TODO check disabling densification
-        # self.opt = GSParams(iterations=2990, densify_until_iter=0)
-        self.opt = GSParams(iterations=2990)
-        self.training(cameras=cams_train)
 
-        # TODO test if CUDA OOM
+        # delete models that will no longer be used
         del self.d_model
         del self.zoom_model
         del self.rgb_model
         gc.collect()
         torch.cuda.empty_cache()
 
-        self.nvs_model = Crafter(cfg_path=nvs_cfg)  # TODO test
+        # TODO check disabling densification
+        self.opt = GSParams(iterations=2990, densify_until_iter=0)
+        # self.opt = GSParams(iterations=2990)
+        self.training(cameras=cams_train)
+
+        # generate all camera poses and render Gaussians
+        # 2D lists: outer dimensions corresponds to each zoom-in level
         n_frames = 25
-        for i in range(n_levels):
-            ext_zoom = generate_lookdown_specified(deg_denom=p**i)
-            c2ws_zoom = np.linalg.inv(
-                np.concatenate(
-                    (
-                        ext_zoom,
-                        np.repeat(
-                            np.array([[[0, 0, 0, 1]]]), ext_zoom.shape[0], axis=0
-                        ),
-                    ),
-                    axis=-2,
-                )
-            )
-            cams_render = [
-                get_render_cam(
-                    focal=focals[i],
-                    c2w=c2ws_zoom[j],
-                    H=H,
-                    W=W,
-                    z_scale=focals[i] / focal,
-                )
-                for j in range(n_frames)
-            ]
-            imgs_render = [
-                render(cams_render[j], self.gaussians, self.opt, self.background)[
-                    "render"
+        imgs_render = []
+        c2ws_zoom = []
+        with torch.no_grad():
+            for i in range(n_levels):
+                ext = generate_lookdown_specified(deg_denom=p**i)
+                arr_ones = np.repeat(np.array([[[0, 0, 0, 1]]]), ext.shape[0], axis=0)
+                c2ws = np.linalg.inv(np.concatenate((ext, arr_ones), axis=-2))
+                c2ws_zoom.append(c2ws)
+                cams_render = [
+                    get_render_cam(
+                        focal=focals[i],
+                        c2w=c2ws[j],
+                        H=H,
+                        W=W,
+                        z_scale=focals[i] / focal,
+                    )
+                    for j in range(n_frames)
                 ]
-                for j in range(n_frames)
-            ]
-            imgs_nvs = (self.nvs_model(imgs_render) + 1.0) / 2.0
+                imgs_render.append([
+                    render(cams_render[j], self.gaussians, self.opt, self.background)[
+                        "render"
+                    ]
+                    for j in range(n_frames)
+                ])
+
+        # load VDM after rendering Gaussians since it will occupy large memory
+        self.nvs_model = Crafter(cfg_path=nvs_cfg)  # TODO test
+        for i in range(n_levels):
+            # TODO resize
+            imgs_cond = torch.stack(imgs_render[i], dim=0)
+            imgs_cond = crop_images(imgs_cond).permute(0, 2, 3, 1)
+            imgs_nvs = (self.nvs_model(imgs_cond) + 1.0) / 2.0
             cams_train.extend(
                 [
                     get_train_cam(
                         img=imgs_nvs[j],
                         focal=focals[i],
-                        c2w=c2ws_zoom[j],
+                        c2w=c2ws_zoom[i][j],
                         H=H,
                         W=W,
                         white_background=self.opt.white_background,
@@ -721,8 +726,12 @@ class Dreamer(LucidDreamer):
                     for j in range(n_frames)
                 ]
             )
-        # self.opt = GSParams(iterations=8990, densify_until_iter=0)
-        self.opt = GSParams(iterations=8990)
+        del self.nvs_model
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        self.opt = GSParams(iterations=8990, densify_until_iter=0)
+        # self.opt = GSParams(iterations=8990)
         self.training(cameras=cams_train)
 
         # save zoom-in videos

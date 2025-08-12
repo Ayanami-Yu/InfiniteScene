@@ -1,3 +1,5 @@
+# CUDA_LAUNCH_BLOCKING=1 CUDA_VISIBLE_DEVICES=1 nohup python run.py > "nohup/out.txt" 2>&1 &
+
 import torch
 
 # torch.cuda.set_device(4)  # TODO remove it
