@@ -551,7 +551,7 @@ def loadCameraPreset(traindata, presetdata):
     return cam_infos
 
 
-def readDataInfo(traindata, white_background):
+def readDataInfo(traindata, white_background, init_pcd_path=None):
     print("Reading Training Transforms")
 
     train_cameras = loadCamerasFromData(traindata, white_background)
@@ -559,9 +559,15 @@ def readDataInfo(traindata, white_background):
 
     nerf_normalization = getNerfppNorm(train_cameras)
 
-    pcd = BasicPointCloud(
-        points=traindata["pcd_points"].T, colors=traindata["pcd_colors"], normals=None
-    )
+    if init_pcd_path is None:
+        pcd = BasicPointCloud(
+            points=traindata["pcd_points"].T,
+            colors=traindata["pcd_colors"],
+            normals=None,
+        )
+    else:
+        # TODO load existing point cloud
+        raise NotImplementedError("Loading point cloud is not yet supported")
 
     scene_info = SceneInfo(
         point_cloud=pcd,

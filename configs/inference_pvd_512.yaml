@@ -2,7 +2,7 @@ model:
   pretrained_checkpoint: /apdcephfs_cq10/share_1290939/vg_share/vip3d_share/3d_320_512_SD-IPA_ztsnr_v_builton11_10k_DL3DVdust3r_fps10_allmode/epoch=7-step=60000.ckpt
   base_learning_rate: 1.0e-05
   scale_lr: False
-  target: lvdm.models.ddpm3d.VIPLatentDiffusion
+  target: viewcrafter.lvdm.models.ddpm3d.VIPLatentDiffusion
   params:
     rescale_betas_zero_snr: True
     parameterization: "v"
@@ -32,7 +32,7 @@ model:
     fix_temporal: True
 
     unet_config:
-      target: lvdm.modules.networks.openaimodel3d.UNetModel
+      target: viewcrafter.lvdm.modules.networks.openaimodel3d.UNetModel
       params:
         in_channels: 8
         out_channels: 4
@@ -67,7 +67,7 @@ model:
         fs_condition: true
 
     first_stage_config:
-      target: lvdm.models.autoencoder.AutoencoderKL
+      target: viewcrafter.lvdm.models.autoencoder.AutoencoderKL
       params:
         embed_dim: 4
         monitor: val/rec_loss
@@ -90,18 +90,18 @@ model:
           target: torch.nn.Identity
 
     cond_stage_config:
-      target: lvdm.modules.encoders.condition.FrozenOpenCLIPEmbedder
+      target: viewcrafter.lvdm.modules.encoders.condition.FrozenOpenCLIPEmbedder
       params:
         freeze: true
         layer: "penultimate"
 
     img_cond_stage_config:
-      target: lvdm.modules.encoders.condition.FrozenOpenCLIPImageEmbedderV2
+      target: viewcrafter.lvdm.modules.encoders.condition.FrozenOpenCLIPImageEmbedderV2
       params:
         freeze: true
     
     image_proj_stage_config:
-      target: lvdm.modules.encoders.resampler.Resampler
+      target: viewcrafter.lvdm.modules.encoders.resampler.Resampler
       params:
         dim: 1024
         depth: 4
@@ -112,3 +112,20 @@ model:
         output_dim: 1024
         ff_mult: 4
         video_length: 16
+opts:
+  perframe_ae: True
+  ckpt_path: "./ckpt/model.ckpt"
+  height: 320
+  width: 512
+  video_length: 25
+  bs: 1
+  n_samples: 1
+  ddim_steps: 50
+  ddim_eta: 1.0
+  unconditional_guidance_scale: 7.5
+  cfg_img: null
+  frame_stride: 10
+  text_input: True
+  multiple_cond_cfg: False
+  timestep_spacing: "uniform_trailing"
+  guidance_rescale: 0.7

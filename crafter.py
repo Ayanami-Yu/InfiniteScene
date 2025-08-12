@@ -18,6 +18,7 @@ class Crafter:
     def setup_diffusion(self, cfg_path):
         config = OmegaConf.load(cfg_path)
         model_config = config.pop("model", OmegaConf.create())
+        self.opts = config.pop("opts", OmegaConf.create())
 
         model = instantiate_from_config(model_config)
         model = model.to(self.device)
@@ -72,6 +73,8 @@ class Crafter:
             Generated video frames (Tensor[n_frames, H, W, C]) in range [-1, 1]
         """
         if len(imgs) != 25:
-            warn("If the number of frames is not 25, the generation quality of ViewCrafter will be significantly worse")
+            warn(
+                "If the number of frames is not 25, the generation quality of ViewCrafter will be significantly worse"
+            )
 
         return self.run_diffusion(imgs)

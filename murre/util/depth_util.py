@@ -42,7 +42,7 @@ def normalize_depth(
 def normalize_depth_torch(
     sdpt, pre_clip_max=None, lower_thresh=2, upper_thresh=98, min_max_dilate=0.2
 ):
-    val_dpt = sdpt[sdpt > 0.0]
+    val_dpt = sdpt[sdpt > 0.0]  # FIXME sometimes CUDA assertions fail
 
     # do not clip if pre_clip_max is not provided
     if pre_clip_max and pre_clip_max > 0 and len(val_dpt) > 0:

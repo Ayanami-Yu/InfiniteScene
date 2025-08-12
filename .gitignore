@@ -212,3 +212,6 @@ gradio_cached_examples
 tmp
 nohup.out
 # submodules/depth-diff-gaussian-rasterization-min/third_party/glm
+
+# model checkpoints of ViewCrafter
+ckpt

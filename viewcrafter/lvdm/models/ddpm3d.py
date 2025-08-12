@@ -23,7 +23,7 @@ from torchvision.utils import make_grid
 import pytorch_lightning as pl
 from pytorch_lightning.utilities import rank_zero_only
 from viewcrafter.diffusion_utils import instantiate_from_config
-from lvdm.ema import LitEma
+from viewcrafter.lvdm.ema import LitEma
 from .samplers.ddim import DDIMSampler
 from ..distributions import DiagonalGaussianDistribution
 from .utils_diffusion import make_beta_schedule, rescale_zero_terminal_snr

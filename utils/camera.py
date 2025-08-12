@@ -21,7 +21,7 @@ from utils.graphics import (
     getProjectionMatrix,
     getWorld2View2,
 )
-from utils.trajectory import get_pcdGenPoses, generate_seed_llff
+from utils.trajectory import get_pcdGenPoses, generate_llff_scaling
 
 
 WARNED = False
@@ -220,7 +220,15 @@ def get_train_cam(img, focal, c2w, H, W, white_background: bool, z_scale=1.0, id
 
 
 def prepare_cameras_zoom_in(
-    pcdgenpath, n_levels, n_views, focal, H, W, p, dtype=torch.float32, device="cuda"
+    pcdgenpath,
+    n_levels,
+    n_views=601,
+    focal=5.8269e02,
+    H=512,
+    W=512,
+    p=2,
+    dtype=torch.float32,
+    device="cuda",
 ):
     cams_ext_init = get_pcdGenPoses(pcdgenpath=pcdgenpath)
     c2w_init = np.linalg.inv(
@@ -247,7 +255,10 @@ def prepare_cameras_zoom_in(
         get_render_cam(focal=f, c2w=c2w_init, H=H, W=W, z_scale=z_s)
         for f, z_s in zip(focals_interp, z_scales)
     ]
-    w2c_llff = generate_seed_llff(5, n_views, round=4, d=0)
+
+    w2c_llff = generate_llff_scaling(
+        1, 0.001 / focals[n_levels - 1], n_views, round=4, d=0
+    )
     c2w_llff = [
         np.linalg.inv(np.concatenate((w2c_llff[i], np.array([[0, 0, 0, 1]])), axis=0))
         for i in range(n_views)

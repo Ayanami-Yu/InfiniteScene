@@ -13,7 +13,11 @@ from arguments import CameraParams, GSParams
 from scene import Scene
 from scene.gaussian_merger import GaussianMerger
 from gaussian_renderer import render
-from utils.trajectory import get_pcdGenPoses, generate_seed_llff, generate_lookdown_specified
+from utils.trajectory import (
+    get_pcdGenPoses,
+    generate_seed_llff,
+    generate_lookdown_specified,
+)
 from utils.camera import get_render_cam, get_train_cam, prepare_cameras_zoom_in
 from gen_powers_10.model import GenPowers10Pipeline
 from gen_powers_10.utils import save_images
@@ -576,6 +580,7 @@ class Dreamer(LucidDreamer):
             outfile = self.save_ply(os.path.join(self.save_dir, "gsplat.ply"))
         return outfile
 
+    # TODO add arguments to argparse
     def create_scene(
         self,
         rgb_cond,
@@ -599,7 +604,7 @@ class Dreamer(LucidDreamer):
             prepare_cameras_zoom_in(
                 pcdgenpath,
                 n_levels,
-                n_views=201,
+                n_views=601,
                 focal=focal,
                 H=self.cam.H,
                 W=self.cam.W,
@@ -658,35 +663,65 @@ class Dreamer(LucidDreamer):
                 ),
                 opt=self.opt,
             )
+        # TODO check disabling densification
+        # self.opt = GSParams(iterations=2990, densify_until_iter=0)
         self.opt = GSParams(iterations=2990)
         self.training(cameras=cams_train)
 
         # TODO test if CUDA OOM
-        # del self.d_model
-        # del self.zoom_model
-        # gc.collect()
-        # torch.cuda.empty_cache()
+        del self.d_model
+        del self.zoom_model
+        del self.rgb_model
+        gc.collect()
+        torch.cuda.empty_cache()
 
         self.nvs_model = Crafter(cfg_path=nvs_cfg)  # TODO test
         n_frames = 25
         for i in range(n_levels):
-            ext_zoom = generate_lookdown_specified(deg_denom=p ** i)
-            c2ws_zoom = np.linalg.inv(np.concatenate((ext_zoom, np.repeat(np.array([[[0, 0, 0, 1]]]), ext_zoom.shape[0], axis=0))))
-            cams_render = [get_render_cam(focal=focals[i], c2w=c2ws_zoom[j], H=H, W=W, z_scale=focals[i] / focal) for j in range(n_frames)]
-            imgs_render = [render(cams_render[j], self.gaussians, self.opt, self.background)["render"] for j in range(n_frames)]
-            imgs_nvs = (self.nvs_model(imgs_render) + 1.0) / 2.0
-            cams_train.extend([
-                get_train_cam(
-                    img=imgs_nvs[j],
+            ext_zoom = generate_lookdown_specified(deg_denom=p**i)
+            c2ws_zoom = np.linalg.inv(
+                np.concatenate(
+                    (
+                        ext_zoom,
+                        np.repeat(
+                            np.array([[[0, 0, 0, 1]]]), ext_zoom.shape[0], axis=0
+                        ),
+                    ),
+                    axis=-2,
+                )
+            )
+            cams_render = [
+                get_render_cam(
                     focal=focals[i],
                     c2w=c2ws_zoom[j],
                     H=H,
                     W=W,
-                    white_background=self.opt.white_background,
                     z_scale=focals[i] / focal,
                 )
                 for j in range(n_frames)
-            ])
+            ]
+            imgs_render = [
+                render(cams_render[j], self.gaussians, self.opt, self.background)[
+                    "render"
+                ]
+                for j in range(n_frames)
+            ]
+            imgs_nvs = (self.nvs_model(imgs_render) + 1.0) / 2.0
+            cams_train.extend(
+                [
+                    get_train_cam(
+                        img=imgs_nvs[j],
+                        focal=focals[i],
+                        c2w=c2ws_zoom[j],
+                        H=H,
+                        W=W,
+                        white_background=self.opt.white_background,
+                        z_scale=focals[i] / focal,
+                    )
+                    for j in range(n_frames)
+                ]
+            )
+        # self.opt = GSParams(iterations=8990, densify_until_iter=0)
         self.opt = GSParams(iterations=8990)
         self.training(cameras=cams_train)
 
@@ -806,7 +841,6 @@ class Dreamer(LucidDreamer):
         self.render_video(cams_diving, "diving_zoom_after")
         self.render_video(cams_diving_llff, "llff_zoom_after")
 
-    # TODO test the corrected V4
     def create_scene_v4(
         self,
         rgb_cond,
@@ -820,6 +854,9 @@ class Dreamer(LucidDreamer):
         """
         Process:
             Progressively and individually train Gaussians one zoom-in level at a time.
+        Caveat:
+            - Although V4 may produce clearer object shapes at higher zoom-in levels (the Gaussians can be better optimized), it also introduces evident inconsistency near the boundaries of zoomed-in images, and it suffers from long-shaped floating black artifacts because the Gaussians are not jointly trained.
+            - Generally, training jointly across all zoom-in levels will be better.
         """
         # generate camera trajectory
         n_levels = len(txt_cond)
@@ -863,7 +900,9 @@ class Dreamer(LucidDreamer):
             points_new, colors_new = self.backproject(
                 image=img_zoomed,
                 ixt=cams_ixt[i],
-                ext=torch.tensor(cams_ext_init[0], dtype=self.dtype, device=self.device),
+                ext=torch.tensor(
+                    cams_ext_init[0], dtype=self.dtype, device=self.device
+                ),
                 points=self.gaussians.get_xyz,
             )
             # merge Gaussians and jointly train

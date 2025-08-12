@@ -7,7 +7,7 @@ import numpy as np
 
 
 class GSParams:
-    def __init__(self, iterations=2990):
+    def __init__(self, iterations=2990, densify_until_iter=15000):
         self.sh_degree = 3
         self.images = "images"
         self.resolution = -1
@@ -30,7 +30,8 @@ class GSParams:
         self.densification_interval = 100
         self.opacity_reset_interval = 3000
         self.densify_from_iter = 500
-        self.densify_until_iter = 15_000
+        # self.densify_until_iter = 15_000
+        self.densify_until_iter = densify_until_iter
         self.densify_grad_threshold = 0.0002
 
         self.convert_SHs_python = False

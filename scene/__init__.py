@@ -13,11 +13,13 @@ from scene.gaussian_model import GaussianModel
 class Scene:
     gaussians: GaussianModel
 
-    def __init__(self, traindata, gaussians: GaussianModel, opt: GSParams):
+    def __init__(
+        self, traindata, gaussians: GaussianModel, opt: GSParams, init_pcd_path=None
+    ):
         self.traindata = traindata
         self.gaussians = gaussians
 
-        info = readDataInfo(traindata, opt.white_background)
+        info = readDataInfo(traindata, opt.white_background, init_pcd_path)
         random.shuffle(info.train_cameras)  # multi-res consistent random shuffling
         self.cameras_extent = info.nerf_normalization["radius"]
 

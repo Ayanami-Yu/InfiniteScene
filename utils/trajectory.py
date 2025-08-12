@@ -1002,6 +1002,9 @@ def generate_seed_newpreset(deg_denom=1):
 def generate_lookdown_specified(deg_denom=1):
     """
     The original "lookdown" trajectory with the number of poses amounting to 25 for the input requirement of ViewCrafter.
+
+    Returns:
+        np.ndarray of shape [25, 3, 4] corresponding to camera poses.
     """
     th_max = 60 / deg_denom
     phi_max = 22.5 / deg_denom
@@ -1789,7 +1792,9 @@ def getCameraPaths():
     return preset_json
 
 
-def generate_obj_centric_orbit(depth_obj, ext, K, y, x, dtype=torch.float32, device="cuda"):
+def generate_obj_centric_orbit(
+    depth_obj, ext, K, y, x, dtype=torch.float32, device="cuda"
+):
     """
     Args:
         depth_obj: Scalar tensor giving the depth corresponding to the pixel (y, x)
@@ -1799,7 +1804,12 @@ def generate_obj_centric_orbit(depth_obj, ext, K, y, x, dtype=torch.float32, dev
     R, T = ext[:, :3, :3], ext[:, :3, 3:4]
     R_inv = torch.linalg.inv(R)
     K_inv = torch.linalg.inv(K)
-    obj_c = K_inv @ torch.tensor([x * depth_obj, y * depth_obj, 1 * depth_obj], dtype=dtype, device=device).T
+    obj_c = (
+        K_inv
+        @ torch.tensor(
+            [x * depth_obj, y * depth_obj, 1 * depth_obj], dtype=dtype, device=device
+        ).T
+    )
     obj_w = R_inv @ obj_c - R_inv @ T
 
     cam_w = -R.T @ T

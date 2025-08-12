@@ -11,12 +11,12 @@ try:
     XFORMERS_IS_AVAILBLE = True
 except:
     XFORMERS_IS_AVAILBLE = False
-from lvdm.common import (
+from ...lvdm.common import (
     checkpoint,
     exists,
     default,
 )
-from lvdm.basics import zero_module
+from ...lvdm.basics import zero_module
 
 
 class RelativePosition(nn.Module):
