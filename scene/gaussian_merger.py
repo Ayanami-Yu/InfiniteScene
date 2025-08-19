@@ -1,14 +1,9 @@
-import os
 import torch
 import torch.nn as nn
-import numpy as np
 
 from simple_knn._C import distCUDA2
-from utils.general import inverse_sigmoid, get_expon_lr_func, build_rotation
-from utils.system import mkdir_p
+from utils.general import inverse_sigmoid
 from utils.sh import RGB2SH
-from utils.graphics import BasicPointCloud
-from utils.general import strip_symmetric, build_scaling_rotation
 from arguments import GSParams
 from .gaussian_model import GaussianModel
 

@@ -9,11 +9,12 @@ from gaussian_renderer import render
 from utils.depth import colorize
 
 
-pcd_path = "outputs/hawaii_lookdown_83920174658/gsplat.ply"
-save_path_rgb = "tmp/v5_rgb_llff.mp4"
-save_path_depth = "tmp/v5_depth_llff.mp4"
+pcd_path = "outputs/hawaii_lookdown_83920174658/v5_no_grad/gsplat.ply"
 
-trajectory = "level_wise"  # level_wise, diving_llff
+trajectory = "diving_llff"  # level_wise, diving_llff
+
+save_path_rgb = f"tmp/v5_no_grad_rgb_{trajectory}.mp4"
+save_path_depth = f"tmp/v5_no_grad_depth_{trajectory}.mp4"
 
 
 if __name__ == "__main__":

@@ -187,7 +187,7 @@ def get_train_cam(img, focal, c2w, H, W, white_background: bool, z_scale=1.0, id
     """
     Params:
         c2w: np.ndarray[4, 4] Camera to world transformation.
-        img: The GT image corresponding to that view. That is, the image projected/interpolated from colored point cloud in `generate_pcd`, or the zoomed-in image.
+        img: The GT PIL image corresponding to that view. That is, the image projected/interpolated from colored point cloud in `generate_pcd`, or the zoomed-in image.
         z_scale: The scaling factor to multiply zfar and znear.
     """
     # get the world-to-camera transform and set R, T
@@ -222,7 +222,7 @@ def get_train_cam(img, focal, c2w, H, W, white_background: bool, z_scale=1.0, id
 def prepare_cameras_zoom_in(
     pcdgenpath,
     n_levels,
-    n_views=601,
+    n_views=301,
     focal=5.8269e02,
     H=512,
     W=512,
@@ -230,6 +230,21 @@ def prepare_cameras_zoom_in(
     dtype=torch.float32,
     device="cuda",
 ):
+    """
+    Returns:
+        focals (List[scalar] of length n_levels):
+            A list of zoom-in focals.
+        c2w_init (np.ndarray[4, 4]):
+            Camera to world transformation corresponding to the first camera (at the most zoomed-out level). 
+        cams_ext_init (np.ndarray[N, 3, 4]):
+            The camera extrinsics of the trajectory corresponding to the most zoomed-out level.
+        cams_ixt (Tensor[n_levels, 3, 3]):
+            The camera intrinsics of the zoom-in trajectory.
+        cams_diving (List[Minicams] of length n_views):
+            A list of minicams of the zoom-in trajectory (straight line) for rendering videos (the cameras have been interpolated).
+        cams_diving_llff (List[Minicams] of length n_views):
+            A list of minicams of the zoom-in llff trajectory for rendering videos (the cameras have been interpolated).
+    """
     cams_ext_init = get_pcdGenPoses(pcdgenpath=pcdgenpath)
     c2w_init = np.linalg.inv(
         np.concatenate((cams_ext_init[0], np.array([[0, 0, 0, 1]])), axis=0)
@@ -256,8 +271,9 @@ def prepare_cameras_zoom_in(
         for f, z_s in zip(focals_interp, z_scales)
     ]
 
+    p_max = p ** (n_levels - 1)
     w2c_llff = generate_llff_scaling(
-        1, 0.001 / focals[n_levels - 1], n_views, round=4, d=0
+        1, 0.001 / p_max, n_views, round=4, d=0
     )
     c2w_llff = [
         np.linalg.inv(np.concatenate((w2c_llff[i], np.array([[0, 0, 0, 1]])), axis=0))
